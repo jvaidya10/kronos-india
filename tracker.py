@@ -340,6 +340,12 @@ def report() -> None:
     avg_win    = wins["pnl_pct"].mean()   if not wins.empty   else 0
     avg_loss   = losses["pnl_pct"].mean() if not losses.empty else 0
     avg_pnl    = evaluated["pnl_pct"].mean()
+
+    # avg_loss must be <= 0 for this formula to be correct.
+    # If it's positive a data issue has crept in — clamp and warn rather than silently inflate.
+    if avg_loss > 0:
+        print(f"  [WARN] avg_loss is positive ({avg_loss:+.2f}%) — check evaluated outcomes for data errors.")
+        avg_loss = 0
     expectancy = (win_rate / 100 * avg_win) + ((1 - win_rate / 100) * avg_loss)
 
     print("\n" + "=" * 60)
