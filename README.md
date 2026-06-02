@@ -336,6 +336,8 @@ kronos-india/
 ├── tracker.py           # Signal logger + outcome evaluator + report
 ├── requirements.txt     # Python dependencies
 ├── USAGE.md             # Full argument reference
+├── tests/
+│   └── test_tracker.py  # Unit tests for outcome evaluation and business day logic
 ├── outputs/
 │   ├── signals_*.csv    # Saved signal CSVs (--save)
 │   └── tracker.db       # SQLite prediction log (--track)
@@ -353,6 +355,16 @@ kronos-india/
 | `Kronos-base` | 102.3M | 512 candles | ~8-12 sec/stock |
 
 Models are downloaded automatically from HuggingFace Hub on first run (~500MB for small) and cached locally. All subsequent runs are fully offline.
+
+---
+
+## Testing
+
+Unit tests cover the tracker's outcome evaluation logic and NSE holiday-aware business day calculation — the two functions that directly affect whether performance claims can be trusted.
+
+```bash
+python -m pytest tests/
+```
 
 ---
 
