@@ -25,44 +25,66 @@ CONTEXT_LEN = {"mini": 2048, "small": 512, "base": 512}
 
 st.set_page_config(page_title="Kronos India", page_icon="📈", layout="wide")
 st.title("📈 Kronos India — NSE Intraday Signal Pipeline")
-st.caption("Powered by Kronos Foundation Model · RTX 5070 · NSE/BSE")
+st.caption("Powered by Kronos Foundation Model · NSE/BSE")
 st.divider()
 
 
-# ── Model loader ─────────────────────────────────────────────────────────────
+# ── Prediction state machine — persists across reruns ────────────────────────
+# Processing one stock per Streamlit run lets the Stop button be responsive.
+_PRED_DEFAULTS = {
+    "pred_mode":         False,
+    "pred_all":          [],   # full stocks list — never mutated during run
+    "pred_idx":          0,    # index of next stock to predict
+    "pred_done":         {},   # {sym: pred_df} results so far
+    "pred_stopped":      False,
+    "pred_trends":       {},
+    "pred_trend_rows":   [],
+    "pred_scan_results": {},
+    "pred_interval":     "1h",
+    "pred_days":         3,
+    "pred_samples":      20,
+    "pred_save":         False,
+    "pred_track":        False,
+    "pred_variant":      "small",
+}
+for _k, _v in _PRED_DEFAULTS.items():
+    st.session_state.setdefault(_k, _v)
+
+run_clicked = False   # defined here so the output panel can always reference it
+
+
+# ── Model loader ──────────────────────────────────────────────────────────────
 
 def _load_model(variant: str) -> None:
     from predictor import load_model
-    load_model(variant)   # no-op if already loaded (module-level guard in predictor.py)
+    load_model(variant)
 
 
 # ── Table stylers ─────────────────────────────────────────────────────────────
 
 def _style_scanner(df: pd.DataFrame, gainers: bool):
-    color = "#198754" if gainers else "#dc3545"
+    color   = "#198754" if gainers else "#dc3545"
     display = df[["symbol", "ltp", "change_pct", "change"]].copy()
     display.columns = ["Symbol", "LTP", "Change %", "Change ₹"]
-    def _col(series):
-        return [f"color: {color}; font-weight: bold"] * len(series)
+    def _col(s):
+        return [f"color: {color}; font-weight: bold"] * len(s)
     return (display.style
                    .apply(_col, subset=["Change %", "Change ₹"])
                    .format({"LTP": "{:.2f}", "Change %": "{:.2f}", "Change ₹": "{:.2f}"}))
 
 
 def _style_trend(df: pd.DataFrame):
-    def _score_col(series):
-        return series.map(lambda v:
+    def _score(s):
+        return s.map(lambda v:
             "color: #198754; font-weight: bold" if v > 0 else
-            ("color: #dc3545; font-weight: bold" if v < 0 else "color: gray")
-        )
-    def _bias_col(series):
-        return series.map(lambda v:
+            ("color: #dc3545; font-weight: bold" if v < 0 else "color: gray"))
+    def _bias(s):
+        return s.map(lambda v:
             "color: #198754" if "BULL" in str(v) else
-            ("color: #dc3545" if "BEAR" in str(v) else "color: gray")
-        )
+            ("color: #dc3545" if "BEAR" in str(v) else "color: gray"))
     return (df.style
-              .apply(_score_col, subset=["Score"])
-              .apply(_bias_col,  subset=["Trend", "Monthly %", "Weekly %"])
+              .apply(_score, subset=["Score"])
+              .apply(_bias,  subset=["Trend", "Monthly %", "Weekly %"])
               .format({"RSI": "{:.2f}", "ADX": "{:.2f}"}))
 
 
@@ -74,6 +96,72 @@ def _style_signals(df: pd.DataFrame):
             return ["color: #dc3545; font-weight: bold"] * len(row)
         return [""] * len(row)
     return df.style.apply(_row, axis=1).format({"Entry ₹": "{:.2f}"})
+
+
+# ── Signal display helper ─────────────────────────────────────────────────────
+
+def _show_signals(predictions, trends, scan_results, stocks, save, track, days, interval, variant):
+    tier_map = {}
+    for tier, (g, l) in scan_results.items():
+        for sym in pd.concat([g, l])["symbol"].tolist():
+            tier_map.setdefault(sym, tier)
+
+    signals = []
+    for sym, *_ in stocks:
+        pred_df = predictions.get(sym)
+        if pred_df is None:
+            continue
+        sig          = generate_signal(sym, pred_df, get_current_price(sym), trends.get(sym))
+        sig.cap_tier = tier_map.get(sym, "unknown")
+        signals.append(sig)
+
+    actionable = [s for s in signals if s.direction != "NO TRADE"]
+
+    if actionable:
+        rows = []
+        for s in actionable:
+            tgt_pct = abs((s.target    - s.entry) / s.entry * 100)
+            sl_pct  = abs((s.stop_loss - s.entry) / s.entry * 100)
+            sign    = "+" if s.direction == "LONG" else "-"
+            rows.append({
+                "Symbol":     s.symbol,
+                "Cap Tier":   getattr(s, "cap_tier", ""),
+                "Direction":  s.direction,
+                "Entry ₹":    s.entry,
+                "Target":     f"{s.target}  ({sign}{tgt_pct:.1f}%)",
+                "Stop Loss":  f"{s.stop_loss}  (-{sl_pct:.1f}%)",
+                "R:R":        f"{s.rr_ratio}:1",
+                "Confidence": s.confidence,
+                "Confluence": s.confluence,
+                "Trend":      s.trend_bias,
+                "Score /8":   s.trend_score,
+            })
+        with st.expander(f"🎯 Trade Signals — {len(actionable)} actionable", expanded=True):
+            st.dataframe(_style_signals(pd.DataFrame(rows)),
+                         use_container_width=True, hide_index=True)
+    else:
+        st.info("No high-conviction trades found in this scan.")
+
+    if save and actionable:
+        df_save = pd.DataFrame([{
+            "Cap Tier": getattr(s, "cap_tier", ""), "Symbol": s.symbol,
+            "Direction": s.direction, "Entry": s.entry, "Target": s.target,
+            "Stop Loss": s.stop_loss, "R:R": s.rr_ratio,
+            "Confidence": s.confidence, "Confluence": s.confluence,
+            "Trend": s.trend_bias, "Trend Score": s.trend_score,
+        } for s in actionable])
+        ts   = datetime.now().strftime("%Y%m%d_%H%M")
+        path = os.path.join(APP_DIR, "outputs", f"signals_{ts}_{variant}.csv")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        df_save.to_csv(path, index=False)
+        st.success(f"Saved → {path}")
+
+    if track and signals:
+        from tracker import log_signals
+        for sig in signals:
+            sig._trend = trends.get(sig.symbol)
+        n = log_signals(signals, pred_days=int(days), interval=interval)
+        st.success(f"Logged {n} signal(s) to tracker.db")
 
 
 # ── Settings panel ────────────────────────────────────────────────────────────
@@ -97,7 +185,14 @@ with left:
     with c1: save  = st.checkbox("Save CSV")
     with c2: track = st.checkbox("Track")
     st.markdown("")
-    run_clicked = st.button("▶  Run Pipeline", type="primary", use_container_width=True)
+
+    # During predictions show Stop; otherwise show Run
+    if st.session_state.pred_mode:
+        if st.button("⏹  Stop Pipeline", type="secondary", use_container_width=True):
+            st.session_state.pred_stopped = True
+            st.rerun()
+    else:
+        run_clicked = st.button("▶  Run Pipeline", type="primary", use_container_width=True)
 
 
 # ── Pipeline output ───────────────────────────────────────────────────────────
@@ -106,21 +201,85 @@ with right:
     st.subheader("Output")
     main_prog = st.progress(0, text="Ready — configure settings and press Run")
 
-    if run_clicked:
+    # ── Prediction mode ───────────────────────────────────────────────────────
+    # Each rerun processes exactly one stock then calls st.rerun().
+    # This makes the Stop button responsive between stocks.
+    if st.session_state.pred_mode:
+        ss        = st.session_state
+        total     = len(ss.pred_all)
+        completed = ss.pred_idx
+
+        main_prog.progress(
+            0.60 + 0.25 * (completed / max(total, 1)),
+            text=f"[4/5] Kronos predictions  ({completed} / {total})"
+        )
+        pred_prog = st.progress(
+            completed / max(total, 1),
+            text=f"Predicting {completed + 1} / {total}" if completed < total else "✓  Complete"
+        )
+
+        all_done = completed >= total
+        stopped  = ss.pred_stopped
+
+        if all_done or stopped:
+            label = "⏹ Stopped" if stopped else "✅ Pipeline complete"
+            main_prog.progress(1.0 if all_done else (0.60 + 0.25 * completed / max(total, 1)),
+                               text=label)
+
+            if ss.pred_trend_rows:
+                with st.expander("📈 Trend Analysis", expanded=False):
+                    st.dataframe(_style_trend(pd.DataFrame(ss.pred_trend_rows)),
+                                 use_container_width=True, hide_index=True)
+
+            if ss.pred_done:
+                main_prog.progress(0.90, text="[5/5] Generating signals...")
+                _show_signals(
+                    predictions  = ss.pred_done,
+                    trends       = ss.pred_trends,
+                    scan_results = ss.pred_scan_results,
+                    stocks       = ss.pred_all,
+                    save         = ss.pred_save,
+                    track        = ss.pred_track,
+                    days         = ss.pred_days,
+                    interval     = ss.pred_interval,
+                    variant      = ss.pred_variant,
+                )
+                main_prog.progress(1.0, text=label)
+            else:
+                st.warning("No predictions completed — nothing to show.")
+
+            # Reset state (takes effect on next user interaction)
+            for _k, _v in _PRED_DEFAULTS.items():
+                st.session_state[_k] = _v
+
+        else:
+            # Process the next stock, then rerun
+            sym, x_df, x_ts, y_ts = ss.pred_all[ss.pred_idx]
+            pred_prog.progress(
+                completed / max(total, 1),
+                text=f"Predicting {sym}  ({completed + 1} / {total})"
+            )
+            with st.spinner(f"Running Kronos on {sym}  ({ss.pred_samples} samples)..."):
+                result = predict_next_day(sym, x_df, x_ts, y_ts,
+                                          sample_count=ss.pred_samples)
+            st.session_state.pred_done[sym] = result
+            st.session_state.pred_idx      += 1
+            st.rerun()
+
+    # ── Initial run — steps 1–3, then hand off to prediction mode ─────────────
+    elif run_clicked:
         context_len = CONTEXT_LEN[variant]
         pred_len    = int(days) * CANDLES_PER_DAY[interval]
         tiers       = ["large", "mid", "small"] if cap == "all" else [cap]
 
-        # Load model — no-op after first load, spinner only visible when loading
+        # Load model
         main_prog.progress(0.05, text="Loading Kronos model...")
         with st.spinner(f"Loading Kronos-{variant} model..."):
             _load_model(variant)
 
-        # ── Step 1: Scanner ───────────────────────────────────────────────────
+        # Step 1: Scanner
         main_prog.progress(0.10, text="[1/5] Scanning NSE...")
-        scan_results = {}
-        symbols      = []
-
+        scan_results, symbols = {}, []
         if symbols_input.strip():
             symbols = [s.upper() for s in symbols_input.strip().split()]
             st.info(f"Symbols override: {', '.join(symbols)}")
@@ -145,7 +304,7 @@ with right:
             st.error("No symbols found.")
             st.stop()
 
-        # ── Step 2: Fetch ─────────────────────────────────────────────────────
+        # Step 2: Fetch
         main_prog.progress(0.25, text="[2/5] Fetching OHLCV data...")
         fetch_prog = st.progress(0.0, text=f"Fetching  0 / {len(symbols)}")
         stocks = []
@@ -160,12 +319,11 @@ with right:
             )
             stocks.append((sym, x_df, x_ts, y_ts))
         fetch_prog.progress(1.0, text=f"✓  {len(stocks)} / {len(symbols)} stocks fetched")
-
         if not stocks:
             st.error("No valid OHLCV data fetched.")
             st.stop()
 
-        # ── Step 3: Trends ────────────────────────────────────────────────────
+        # Step 3: Trends
         main_prog.progress(0.45, text="[3/5] Analysing trends...")
         trends, trend_rows = {}, []
         for sym, *_ in stocks:
@@ -188,86 +346,23 @@ with right:
                 st.dataframe(_style_trend(pd.DataFrame(trend_rows)),
                              use_container_width=True, hide_index=True)
 
-        # ── Step 4: Predictions ───────────────────────────────────────────────
-        main_prog.progress(0.60, text="[4/5] Running Kronos predictions...")
-        pred_prog   = st.progress(0.0, text=f"Predicting  0 / {len(stocks)}")
-        predictions = {}
-        for i, (sym, x_df, x_ts, y_ts) in enumerate(stocks):
-            pred_prog.progress(i / len(stocks),
-                               text=f"Predicting {sym}  ({i + 1} / {len(stocks)})")
-            predictions[sym] = predict_next_day(
-                sym, x_df, x_ts, y_ts, sample_count=int(samples)
-            )
-            pred_prog.progress((i + 1) / len(stocks),
-                               text=f"Done {sym}  ({i + 1} / {len(stocks)})")
-        pred_prog.progress(1.0, text="✓  Predictions complete")
-
-        # ── Step 5: Signals ───────────────────────────────────────────────────
-        main_prog.progress(0.85, text="[5/5] Generating signals...")
-
-        tier_map = {}
-        for tier, (g, l) in scan_results.items():
-            for sym in pd.concat([g, l])["symbol"].tolist():
-                tier_map.setdefault(sym, tier)
-
-        signals = []
-        for sym, *_ in stocks:
-            pred_df = predictions.get(sym)
-            if pred_df is None:
-                continue
-            sig          = generate_signal(sym, pred_df, get_current_price(sym), trends.get(sym))
-            sig.cap_tier = tier_map.get(sym, "unknown")
-            signals.append(sig)
-
-        actionable = [s for s in signals if s.direction != "NO TRADE"]
-
-        if actionable:
-            rows = []
-            for s in actionable:
-                tgt_pct = abs((s.target    - s.entry) / s.entry * 100)
-                sl_pct  = abs((s.stop_loss - s.entry) / s.entry * 100)
-                sign    = "+" if s.direction == "LONG" else "-"
-                rows.append({
-                    "Symbol":     s.symbol,
-                    "Cap Tier":   getattr(s, "cap_tier", ""),
-                    "Direction":  s.direction,
-                    "Entry ₹":    s.entry,
-                    "Target":     f"{s.target}  ({sign}{tgt_pct:.1f}%)",
-                    "Stop Loss":  f"{s.stop_loss}  (-{sl_pct:.1f}%)",
-                    "R:R":        f"{s.rr_ratio}:1",
-                    "Confidence": s.confidence,
-                    "Confluence": s.confluence,
-                    "Trend":      s.trend_bias,
-                    "Score /8":   s.trend_score,
-                })
-            with st.expander(f"🎯 Trade Signals — {len(actionable)} actionable", expanded=True):
-                st.dataframe(_style_signals(pd.DataFrame(rows)),
-                             use_container_width=True, hide_index=True)
-        else:
-            st.info("No high-conviction trades found in this scan.")
-
-        if save and actionable:
-            df_save = pd.DataFrame([{
-                "Cap Tier": getattr(s, "cap_tier", ""), "Symbol": s.symbol,
-                "Direction": s.direction, "Entry": s.entry, "Target": s.target,
-                "Stop Loss": s.stop_loss, "R:R": s.rr_ratio,
-                "Confidence": s.confidence, "Confluence": s.confluence,
-                "Trend": s.trend_bias, "Trend Score": s.trend_score,
-            } for s in actionable])
-            ts   = datetime.now().strftime("%Y%m%d_%H%M")
-            path = os.path.join(APP_DIR, "outputs", f"signals_{ts}_{variant}.csv")
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            df_save.to_csv(path, index=False)
-            st.success(f"Saved → {path}")
-
-        if track:
-            from tracker import log_signals
-            for sig in signals:
-                sig._trend = trends.get(sig.symbol)
-            n = log_signals(signals, pred_days=int(days), interval=interval)
-            st.success(f"Logged {n} signal(s) to tracker.db")
-
-        main_prog.progress(1.0, text="✅ Pipeline complete")
+        # Hand off to prediction mode — one stock per rerun from here
+        main_prog.progress(0.60, text="[4/5] Starting Kronos predictions...")
+        st.session_state.pred_mode         = True
+        st.session_state.pred_all          = stocks
+        st.session_state.pred_idx          = 0
+        st.session_state.pred_done         = {}
+        st.session_state.pred_stopped      = False
+        st.session_state.pred_trends       = trends
+        st.session_state.pred_trend_rows   = trend_rows
+        st.session_state.pred_scan_results = scan_results
+        st.session_state.pred_interval     = interval
+        st.session_state.pred_days         = int(days)
+        st.session_state.pred_samples      = int(samples)
+        st.session_state.pred_save         = save
+        st.session_state.pred_track        = track
+        st.session_state.pred_variant      = variant
+        st.rerun()
 
 
 # ── Prediction Tracker ────────────────────────────────────────────────────────
