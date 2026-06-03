@@ -71,7 +71,7 @@ run_clicked = False   # defined here so the output panel can always reference it
 # ── Model loader ──────────────────────────────────────────────────────────────
 
 def _load_model(variant: str) -> None:
-    from predictor import load_model
+    from pipeline.predictor import load_model
     load_model(variant)
 
 
@@ -327,7 +327,7 @@ with right:
             symbols = [s.split(" — ")[0] for s in symbols_selected]
             st.info(f"Symbols override: {', '.join(symbols)}")
         else:
-            from market_scanner import get_top_gainers_losers
+            from pipeline.market_scanner import get_top_gainers_losers
             scan_results = get_top_gainers_losers(top_n=int(top), tiers=tiers)
             for tier, (gainers_df, losers_df) in scan_results.items():
                 with st.expander(f"📊 {tier.upper()} CAP", expanded=True):
@@ -399,7 +399,7 @@ with right:
                 sent_prog.progress((i + 1) / len(sym_list),
                                    text=f"Sentiment {sym}  ({i + 1} / {len(sym_list)})")
                 try:
-                    from sentiment_analyzer import analyze as _analyze_sent
+                    from pipeline.sentiment_analyzer import analyze as _analyze_sent
                     import time as _time
                     sentiments[sym] = _analyze_sent(sym)
                     _time.sleep(0.3)
@@ -433,27 +433,244 @@ with right:
 st.divider()
 st.subheader("Prediction Tracker")
 
-b1, b2, b3, b4, _ = st.columns([1, 1.5, 1, 1.3, 3])
-tracker_out = st.empty()
+import sqlite3
+
+_DB_PATH = os.path.join(APP_DIR, "outputs", "tracker.db")
+
+st.session_state.setdefault("tracker_view",  None)
+st.session_state.setdefault("tracker_eval",  [])   # [(kind, text), ...]
 
 
-def _run_tracker(command: str, extra: list = None):
-    cmd = [sys.executable, os.path.join(APP_DIR, "tracker.py"), command]
-    if extra:
-        cmd += extra
+def _tracker_load() -> pd.DataFrame | None:
+    if not os.path.exists(_DB_PATH):
+        return None
+    try:
+        with sqlite3.connect(_DB_PATH) as con:
+            return pd.read_sql("SELECT * FROM signals ORDER BY id DESC", con)
+    except Exception:
+        return None
+
+
+def _run_evaluate(force: bool = False):
+    cmd = [sys.executable, os.path.join(APP_DIR, "tracker.py"), "evaluate"]
+    if force:
+        cmd.append("--force")
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=APP_DIR)
-    tracker_out.code(result.stdout + (result.stderr or "") or "(no output)", language=None)
+    lines = []
+    for line in (result.stdout + (result.stderr or "")).splitlines():
+        t = line.strip()
+        if not t:
+            continue
+        if "[WIN" in t:
+            lines.append(("success", t))
+        elif "[LOSS" in t:
+            lines.append(("error", t))
+        elif "[EXP" in t:
+            lines.append(("warning", t))
+        elif "complete" in t.lower() or "logged" in t.lower():
+            lines.append(("success", t))
+        elif "skipping" in t.lower() or "no signals" in t.lower():
+            lines.append(("info", t))
+        else:
+            lines.append(("caption", t))
+    st.session_state.tracker_eval = lines
+    st.session_state.tracker_view = "evaluate"
 
 
+def _render_evaluate():
+    for kind, text in st.session_state.tracker_eval:
+        if   kind == "success": st.success(text)
+        elif kind == "error":   st.error(text)
+        elif kind == "warning": st.warning(text)
+        elif kind == "info":    st.info(text)
+        else:                   st.caption(text)
+
+
+def _render_report():
+    df = _tracker_load()
+    if df is None:
+        st.info("No tracker database found — run the pipeline with **Track** enabled.")
+        return
+    if df.empty:
+        st.info("No signals logged yet.")
+        return
+
+    evaluated = df[df["outcome"].isin(["WIN", "LOSS", "EXPIRED"])].copy()
+    if evaluated.empty:
+        pending = df[df["outcome"].isna()]
+        st.info(f"No evaluated signals yet — {len(pending)} pending. "
+                "Click **Evaluate** after the prediction window closes.")
+        return
+
+    wins    = evaluated[evaluated["outcome"] == "WIN"]
+    losses  = evaluated[evaluated["outcome"] == "LOSS"]
+    expired = evaluated[evaluated["outcome"] == "EXPIRED"]
+    total   = len(evaluated)
+    wr      = len(wins) / total * 100
+    avg_win  = wins["pnl_pct"].mean()   if not wins.empty   else 0.0
+    avg_loss = losses["pnl_pct"].mean() if not losses.empty else 0.0
+    avg_pnl  = evaluated["pnl_pct"].mean()
+    expectancy = (wr / 100 * avg_win) + ((1 - wr / 100) * avg_loss)
+
+    # Summary metrics
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Total",      total)
+    c2.metric("Win Rate",   f"{wr:.1f}%")
+    c3.metric("Wins",       len(wins))
+    c4.metric("Losses",     len(losses))
+    c5.metric("Expired",    len(expired))
+    c6.metric("Expectancy", f"{expectancy:+.2f}%")
+
+    c7, c8, c9 = st.columns(3)
+    c7.metric("Avg Win P&L",  f"{avg_win:+.2f}%")
+    c8.metric("Avg Loss P&L", f"{avg_loss:+.2f}%")
+    c9.metric("Avg All P&L",  f"{avg_pnl:+.2f}%")
+
+    st.markdown("---")
+
+    def _breakdown(col, values):
+        if col not in evaluated.columns:
+            return None
+        rows = []
+        for v in values:
+            sub = evaluated[evaluated[col] == v]
+            if sub.empty:
+                continue
+            w = len(sub[sub["outcome"] == "WIN"])
+            rows.append({"": v, "Trades": len(sub),
+                         "Win %": f"{w / len(sub) * 100:.0f}%",
+                         "Avg P&L": f"{sub['pnl_pct'].mean():+.2f}%"})
+        return pd.DataFrame(rows) if rows else None
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("**By Confluence**")
+        d = _breakdown("confluence", ["STRONG", "MODERATE", "WEAK"])
+        if d is not None: st.dataframe(d, hide_index=True, use_container_width=True)
+    with col2:
+        st.markdown("**By Confidence**")
+        d = _breakdown("confidence", ["HIGH", "MEDIUM", "LOW"])
+        if d is not None: st.dataframe(d, hide_index=True, use_container_width=True)
+    with col3:
+        st.markdown("**By Sentiment**")
+        d = _breakdown("sentiment", ["BULLISH", "NEUTRAL", "BEARISH"])
+        if d is not None:
+            st.dataframe(d, hide_index=True, use_container_width=True)
+        else:
+            st.caption("No sentiment data yet")
+
+    col4, col5, col6 = st.columns(3)
+    with col4:
+        st.markdown("**By Cap Tier**")
+        d = _breakdown("cap_tier", ["large", "mid", "small"])
+        if d is not None: st.dataframe(d, hide_index=True, use_container_width=True)
+    with col5:
+        st.markdown("**By Direction**")
+        d = _breakdown("direction", ["LONG", "SHORT"])
+        if d is not None: st.dataframe(d, hide_index=True, use_container_width=True)
+    with col6:
+        st.markdown("**By Interval**")
+        d = _breakdown("interval", ["1h", "15m", "5m", "1m"])
+        if d is not None: st.dataframe(d, hide_index=True, use_container_width=True)
+
+    st.markdown("---")
+
+    # Best / worst trades
+    vcols = [c for c in ["symbol", "direction", "entry", "pnl_pct",
+                          "confluence", "logged_at"] if c in evaluated.columns]
+    cb, cw = st.columns(2)
+    with cb:
+        st.markdown("**Best Trades**")
+        st.dataframe(evaluated.nlargest(3, "pnl_pct")[vcols],
+                     hide_index=True, use_container_width=True)
+    with cw:
+        st.markdown("**Worst Trades**")
+        st.dataframe(evaluated.nsmallest(3, "pnl_pct")[vcols],
+                     hide_index=True, use_container_width=True)
+
+    # Streaks
+    decisive = evaluated[evaluated["outcome"].isin(["WIN", "LOSS"])].sort_values("logged_at")
+    if not decisive.empty:
+        outcomes = decisive["outcome"].tolist()
+        cur_val, cur_count = outcomes[-1], 0
+        for o in reversed(outcomes):
+            if o == cur_val: cur_count += 1
+            else: break
+
+        best_win = worst_loss = run = 1
+        for i in range(1, len(outcomes)):
+            run = run + 1 if outcomes[i] == outcomes[i - 1] else 1
+            if outcomes[i] == "WIN":  best_win   = max(best_win,   run)
+            if outcomes[i] == "LOSS": worst_loss = max(worst_loss, run)
+
+        st.markdown("---")
+        sc1, sc2, sc3 = st.columns(3)
+        sc1.metric("Current Streak",  f"{cur_count} × {cur_val}")
+        sc2.metric("Best Win Streak", f"{best_win} in a row")
+        sc3.metric("Worst Loss Run",  f"{worst_loss} in a row")
+
+
+def _render_show():
+    df = _tracker_load()
+    if df is None or df.empty:
+        st.info("No signals logged yet.")
+        return
+
+    pending   = df[df["outcome"].isna()].copy()
+    evaluated = df[df["outcome"].notna()].copy()
+
+    tab_p, tab_e = st.tabs(
+        [f"Pending  ({len(pending)})", f"Evaluated  ({len(evaluated)})"]
+    )
+
+    with tab_p:
+        if pending.empty:
+            st.info("No pending signals.")
+        else:
+            pcols = [c for c in ["logged_at", "symbol", "cap_tier", "direction",
+                                  "entry", "target", "rr_ratio", "confidence",
+                                  "confluence", "eval_by"] if c in pending.columns]
+            st.dataframe(pending[pcols], hide_index=True, use_container_width=True)
+
+    with tab_e:
+        if evaluated.empty:
+            st.info("No evaluated signals yet.")
+        else:
+            ecols = [c for c in ["logged_at", "symbol", "cap_tier", "direction",
+                                  "entry", "pnl_pct", "outcome",
+                                  "confidence", "confluence", "eval_by"]
+                     if c in evaluated.columns]
+
+            def _color_row(row):
+                o = row.get("outcome", "")
+                if o == "WIN":     return ["background-color: #1a3a1a"] * len(row)
+                if o == "LOSS":    return ["background-color: #3a1a1a"] * len(row)
+                if o == "EXPIRED": return ["background-color: #2a2a1a"] * len(row)
+                return [""] * len(row)
+
+            st.dataframe(
+                evaluated[ecols].style.apply(_color_row, axis=1),
+                hide_index=True, use_container_width=True,
+            )
+
+
+# Buttons
+b1, b2, b3, b4, _ = st.columns([1, 1.5, 1, 1.3, 3])
 with b1:
     if st.button("Evaluate", use_container_width=True):
-        _run_tracker("evaluate")
+        _run_evaluate(force=False)
 with b2:
     if st.button("Evaluate --force", use_container_width=True):
-        _run_tracker("evaluate", ["--force"])
+        _run_evaluate(force=True)
 with b3:
     if st.button("Report", use_container_width=True):
-        _run_tracker("report")
+        st.session_state.tracker_view = "report"
 with b4:
     if st.button("Show Signals", use_container_width=True):
-        _run_tracker("show")
+        st.session_state.tracker_view = "show"
+
+# Render active view
+_view = st.session_state.tracker_view
+if   _view == "evaluate": _render_evaluate()
+elif _view == "report":   _render_report()
+elif _view == "show":     _render_show()
