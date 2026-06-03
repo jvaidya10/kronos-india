@@ -52,9 +52,10 @@ This project wraps Kronos into a complete signal generation and tracking system 
 
 1. **Scans NSE** for today's top gainers and losers across Large Cap (Nifty 100), Mid Cap (Nifty Midcap 150), and Small Cap (Nifty Smallcap 250)
 2. **Analyses trends** using RSI, ADX, SMA20/50, weekly/monthly momentum, RVOL, and OBV
-3. **Predicts price** using Kronos — fed the last 512 candles of OHLCV history at your chosen interval
-4. **Generates signals** with entry, target (5–7%), stop-loss (2.5%), and R:R ratio — only when Kronos and the trend agree
-5. **Tracks outcomes** over time to measure real-world accuracy against actual market data
+3. **Analyses sentiment** using FinBERT on recent Google News headlines — BULLISH / BEARISH / NEUTRAL per stock
+4. **Predicts price** using Kronos — fed the last 512 candles of OHLCV history at your chosen interval
+5. **Generates signals** with entry, target (5–7%), stop-loss (2.5%), and R:R ratio — only when Kronos and the trend agree
+6. **Tracks outcomes** over time to measure real-world accuracy against actual market data
 
 ---
 
@@ -64,11 +65,12 @@ This project wraps Kronos into a complete signal generation and tracking system 
 NSE Archive CSVs          →  Large / Mid / Small cap universe
 yfinance OHLCV            →  Historical candles (1h / 15m / 5m / 1m)
 Trend Analyzer            →  RSI · ADX · SMA · RVOL · OBV · Momentum
+Google News RSS + FinBERT →  Sentiment per stock (BULLISH / BEARISH / NEUTRAL)
         ↓
 Kronos Foundation Model   →  Predicts next N trading days (OHLCV)
         ↓
 Signal Generator          →  LONG / SHORT / NO TRADE
-                              Entry · Target · Stop-Loss · R:R · Confluence
+                              Entry · Target · Stop-Loss · R:R · Confluence · Sentiment
         ↓
 Prediction Tracker        →  SQLite log · WIN/LOSS evaluation · Performance report
 ```
@@ -203,12 +205,15 @@ python main.py --symbols RELIANCE TCS INFY --samples 5
        TECHM  1543.20        4.00   59.30
         INFY  1202.50        3.58   41.60
 
-[3/5] Analysing weekly & monthly trends...
+[3/6] Analysing weekly & monthly trends...
   TECHM    Monthly:BULLISH (+6.6%)  Weekly:BULLISH (+7.7%)
            RSI:77.28  ADX:14.30  SMA20=above SMA50=above
            RVOL=1.77x[SPIKE] OBV=RISING  => STRONGLY BULLISH [score +7]
 
-[4/5] Running Kronos predictions (samples=20)...
+[4/6] Analysing news sentiment...
+  TECHM    Sentiment: BULLISH (0.79, 6 headlines)
+
+[5/6] Running Kronos predictions (samples=20)...
   Predicting: TECHM...
 
 ======================================================================
@@ -222,6 +227,7 @@ python main.py --symbols RELIANCE TCS INFY --samples 5
     Stop Loss: 1504.62  (-2.5%)
     R:R Ratio: 2.01:1
     Trend:     STRONGLY BULLISH  (score +7/8)
+    Sentiment: BULLISH (0.79, 6 headlines)
     * Kronos predicts upside 6.2%
     * Monthly: BULLISH (+6.6%) | Weekly: BULLISH (+7.7%)
     * RSI 77.28 | ADX 14.3 | Score +7/8
@@ -302,6 +308,11 @@ HIGH       : 10 trades | Win rate 80% | Avg P&L +4.1%
 MEDIUM     : 11 trades | Win rate 55% | Avg P&L +1.8%
 LOW        :  3 trades | Win rate 33% | Avg P&L -0.6%
 
+--- By Sentiment ---
+BULLISH  :  9 trades | Win rate 78% | Avg P&L +3.9%
+NEUTRAL  : 11 trades | Win rate 55% | Avg P&L +1.4%
+BEARISH  :  4 trades | Win rate 25% | Avg P&L -1.2%
+
 --- By Cap Tier ---
 LARGE cap  : 10 trades | Win rate 70% | Avg P&L +3.2%
 SMALL cap  :  8 trades | Win rate 50% | Avg P&L +0.8%
@@ -331,6 +342,7 @@ kronos-india/
 ├── market_scanner.py    # NSE gainers/losers by cap tier
 ├── data_fetcher.py      # Historical OHLCV via yfinance (multi-interval)
 ├── trend_analyzer.py    # RSI, ADX, SMA, RVOL, OBV, momentum scoring
+├── sentiment_analyzer.py# FinBERT news sentiment (Google News RSS)
 ├── predictor.py         # Kronos model wrapper (GPU-accelerated)
 ├── signal_generator.py  # LONG/SHORT signal with entry/target/SL
 ├── tracker.py           # Signal logger + outcome evaluator + report
@@ -377,10 +389,10 @@ python -m pytest tests/
 - [x] Prediction tracker with WIN/LOSS evaluation
 - [x] Tracker: interval-aware evaluation, NSE holiday scheduling, actual-entry P&L, streak tracking
 - [x] Web dashboard (Streamlit) with live progress, styled tables, tracker controls
+- [x] FinBERT news sentiment analysis (Google News RSS, no API key required)
 - [ ] Fine-tuning Kronos on Indian market data
 - [ ] Live candle loop (re-predict every candle during market hours)
 - [ ] Telegram / email alerts for actionable signals
-- [ ] Groww SDK integration for real-time live data
 
 ---
 

@@ -17,9 +17,10 @@ import pandas as pd
 import streamlit as st
 
 from data_fetcher     import fetch_ohlcv, prepare_context_and_forecast_timestamps, get_current_price, CANDLES_PER_DAY
-from trend_analyzer   import analyze as analyze_trend
-from signal_generator import generate_signal
-from predictor        import predict_next_day
+from trend_analyzer      import analyze as analyze_trend
+from signal_generator    import generate_signal
+from predictor           import predict_next_day
+from sentiment_analyzer  import analyze_batch as analyze_sentiments
 
 CONTEXT_LEN = {"mini": 2048, "small": 512, "base": 512}
 
@@ -39,13 +40,15 @@ _PRED_DEFAULTS = {
     "pred_stopped":      False,
     "pred_trends":       {},
     "pred_trend_rows":   [],
-    "pred_scan_results": {},
-    "pred_interval":     "1h",
-    "pred_days":         3,
-    "pred_samples":      20,
-    "pred_save":         False,
-    "pred_track":        False,
-    "pred_variant":      "small",
+    "pred_scan_results":  {},
+    "pred_interval":      "1h",
+    "pred_days":          3,
+    "pred_samples":       20,
+    "pred_save":          False,
+    "pred_track":         False,
+    "pred_variant":       "small",
+    "pred_sentiments":    {},
+    "pred_no_sentiment":  False,
 }
 for _k, _v in _PRED_DEFAULTS.items():
     st.session_state.setdefault(_k, _v)
@@ -100,7 +103,7 @@ def _style_signals(df: pd.DataFrame):
 
 # ── Signal display helper ─────────────────────────────────────────────────────
 
-def _show_signals(predictions, trends, scan_results, stocks, save, track, days, interval, variant):
+def _show_signals(predictions, trends, scan_results, stocks, save, track, days, interval, variant, sentiments=None):
     tier_map = {}
     for tier, (g, l) in scan_results.items():
         for sym in pd.concat([g, l])["symbol"].tolist():
@@ -113,6 +116,11 @@ def _show_signals(predictions, trends, scan_results, stocks, save, track, days, 
             continue
         sig          = generate_signal(sym, pred_df, get_current_price(sym), trends.get(sym))
         sig.cap_tier = tier_map.get(sym, "unknown")
+        if sentiments and sym in sentiments:
+            s = sentiments[sym]
+            sig.sentiment       = s.label
+            sig.sentiment_score = s.score
+            sig.sentiment_count = s.count
         signals.append(sig)
 
     actionable = [s for s in signals if s.direction != "NO TRADE"]
@@ -135,6 +143,7 @@ def _show_signals(predictions, trends, scan_results, stocks, save, track, days, 
                 "Confluence": s.confluence,
                 "Trend":      s.trend_bias,
                 "Score /8":   s.trend_score,
+                "Sentiment":  f"{s.sentiment} ({s.sentiment_score:.2f}, {s.sentiment_count}h)" if s.sentiment_count > 0 else s.sentiment,
             })
         with st.expander(f"🎯 Trade Signals — {len(actionable)} actionable", expanded=True):
             st.dataframe(_style_signals(pd.DataFrame(rows)),
@@ -179,9 +188,10 @@ with left:
     samples = st.number_input("Ensemble Samples", min_value=5, max_value=200, value=20, step=5)
     st.markdown("---")
     symbols_input = st.text_input("Symbols Override (optional)", placeholder="RELIANCE TCS INFY")
-    c1, c2 = st.columns(2)
-    with c1: save  = st.checkbox("Save CSV")
-    with c2: track = st.checkbox("Track")
+    c1, c2, c3 = st.columns(3)
+    with c1: save         = st.checkbox("Save CSV")
+    with c2: track        = st.checkbox("Track")
+    with c3: no_sentiment = st.checkbox("Skip Sentiment")
     st.markdown("")
 
     # During predictions show Stop; otherwise show Run
@@ -231,7 +241,7 @@ with right:
 
         main_prog.progress(
             0.60 + 0.25 * (completed / max(total, 1)),
-            text=f"[4/5] Kronos predictions  ({completed} / {total})"
+            text=f"[5/6] Kronos predictions  ({completed} / {total})"
         )
         pred_prog = st.progress(
             completed / max(total, 1),
@@ -247,7 +257,7 @@ with right:
                                text=label)
 
             if ss.pred_done:
-                main_prog.progress(0.90, text="[5/5] Generating signals...")
+                main_prog.progress(0.90, text="[6/6] Generating signals...")
                 _show_signals(
                     predictions  = ss.pred_done,
                     trends       = ss.pred_trends,
@@ -258,6 +268,7 @@ with right:
                     days         = ss.pred_days,
                     interval     = ss.pred_interval,
                     variant      = ss.pred_variant,
+                    sentiments   = ss.pred_sentiments,
                 )
                 main_prog.progress(1.0, text=label)
             else:
@@ -293,7 +304,7 @@ with right:
             _load_model(variant)
 
         # Step 1: Scanner
-        main_prog.progress(0.10, text="[1/5] Scanning NSE...")
+        main_prog.progress(0.10, text="[1/6] Scanning NSE...")
         scan_results, symbols = {}, []
         if symbols_input.strip():
             symbols = [s.upper() for s in symbols_input.strip().split()]
@@ -320,7 +331,7 @@ with right:
             st.stop()
 
         # Step 2: Fetch
-        main_prog.progress(0.25, text="[2/5] Fetching OHLCV data...")
+        main_prog.progress(0.22, text="[2/6] Fetching OHLCV data...")
         fetch_prog = st.progress(0.0, text=f"Fetching  0 / {len(symbols)}")
         stocks = []
         for i, sym in enumerate(symbols):
@@ -339,7 +350,7 @@ with right:
             st.stop()
 
         # Step 3: Trends
-        main_prog.progress(0.45, text="[3/5] Analysing trends...")
+        main_prog.progress(0.38, text="[3/6] Analysing trends...")
         trends, trend_rows = {}, []
         for sym, *_ in stocks:
             t = analyze_trend(sym)
@@ -361,8 +372,26 @@ with right:
                 st.dataframe(_style_trend(pd.DataFrame(trend_rows)),
                              use_container_width=True, hide_index=True)
 
+        # Step 4: Sentiment
+        sentiments = {}
+        if not no_sentiment:
+            main_prog.progress(0.52, text="[4/6] Analysing news sentiment...")
+            sent_prog = st.progress(0.0, text=f"Sentiment  0 / {len(stocks)}")
+            sym_list  = [s[0] for s in stocks]
+            for i, sym in enumerate(sym_list):
+                sent_prog.progress((i + 1) / len(sym_list),
+                                   text=f"Sentiment {sym}  ({i + 1} / {len(sym_list)})")
+                try:
+                    from sentiment_analyzer import analyze as _analyze_sent
+                    import time as _time
+                    sentiments[sym] = _analyze_sent(sym)
+                    _time.sleep(0.3)
+                except Exception:
+                    pass
+            sent_prog.progress(1.0, text=f"✓  Sentiment done ({len(sentiments)} stocks)")
+
         # Hand off to prediction mode — one stock per rerun from here
-        main_prog.progress(0.60, text="[4/5] Starting Kronos predictions...")
+        main_prog.progress(0.60, text="[5/6] Starting Kronos predictions...")
         st.session_state.pred_mode         = True
         st.session_state.pred_all          = stocks
         st.session_state.pred_idx          = 0
@@ -377,6 +406,8 @@ with right:
         st.session_state.pred_save         = save
         st.session_state.pred_track        = track
         st.session_state.pred_variant      = variant
+        st.session_state.pred_sentiments   = sentiments
+        st.session_state.pred_no_sentiment = no_sentiment
         st.rerun()
 
 

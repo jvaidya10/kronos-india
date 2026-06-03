@@ -105,6 +105,18 @@ def init_db() -> None:
             con.execute("ALTER TABLE signals ADD COLUMN actual_entry REAL")
         except Exception:
             pass
+        try:
+            con.execute("ALTER TABLE signals ADD COLUMN sentiment TEXT DEFAULT 'NEUTRAL'")
+        except Exception:
+            pass
+        try:
+            con.execute("ALTER TABLE signals ADD COLUMN sentiment_score REAL DEFAULT 0.0")
+        except Exception:
+            pass
+        try:
+            con.execute("ALTER TABLE signals ADD COLUMN sentiment_count INTEGER DEFAULT 0")
+        except Exception:
+            pass
 
 
 def _is_trading_day(d: datetime) -> bool:
@@ -184,8 +196,9 @@ def log_signals(signals: list, pred_days: int = 3, interval: str = "1h",
                 (logged_at, eval_by, symbol, cap_tier, direction,
                  entry, target, stop_loss, target_pct, stoploss_pct,
                  rr_ratio, pred_days, interval, confidence, confluence,
-                 trend_bias, trend_score, rvol, volume_spike, obv_trend)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 trend_bias, trend_score, rvol, volume_spike, obv_trend,
+                 sentiment, sentiment_score, sentiment_count)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 now.strftime("%Y-%m-%d %H:%M"),
                 eval_by.strftime("%Y-%m-%d"),
@@ -200,6 +213,9 @@ def log_signals(signals: list, pred_days: int = 3, interval: str = "1h",
                 getattr(trend, "rvol", None),
                 int(getattr(trend, "volume_spike", False)),
                 getattr(trend, "obv_trend", None),
+                getattr(s, "sentiment", "NEUTRAL"),
+                getattr(s, "sentiment_score", 0.0),
+                getattr(s, "sentiment_count", 0),
             ))
             logged += 1
 
@@ -424,6 +440,16 @@ def report() -> None:
             continue
         wr = len(sub[sub["outcome"] == "WIN"]) / len(sub) * 100
         print(f"  {conf:<8} : {len(sub):>3} trades | Win rate {wr:.0f}% | "
+              f"Avg P&L {sub['pnl_pct'].mean():+.2f}%")
+
+    # By sentiment
+    print("\n  --- By Sentiment ---")
+    for sent in ["BULLISH", "NEUTRAL", "BEARISH"]:
+        sub = evaluated[evaluated["sentiment"] == sent]
+        if sub.empty:
+            continue
+        wr = len(sub[sub["outcome"] == "WIN"]) / len(sub) * 100
+        print(f"  {sent:<8} : {len(sub):>3} trades | Win rate {wr:.0f}% | "
               f"Avg P&L {sub['pnl_pct'].mean():+.2f}%")
 
     # By cap tier

@@ -31,8 +31,11 @@ class TradeSignal:
     confidence:  str    # "HIGH", "MEDIUM", "LOW"
     trend_bias:  str
     trend_score: int
-    confluence:  str    # "STRONG", "MODERATE", "WEAK", "AGAINST TREND"
-    reasons:     list = field(default_factory=list)
+    confluence:      str    # "STRONG", "MODERATE", "WEAK", "AGAINST TREND"
+    reasons:         list = field(default_factory=list)
+    sentiment:       str  = "NEUTRAL"   # "BULLISH", "BEARISH", "NEUTRAL"
+    sentiment_score: float = 0.0
+    sentiment_count: int   = 0
 
 
 def _confidence_from_iqr(pred_df: pd.DataFrame, entry: float) -> str:
@@ -156,6 +159,7 @@ def signals_to_dataframe(signals: list) -> pd.DataFrame:
             "Trend":      s.trend_bias,
             "Confluence": s.confluence,
             "Reason":     " | ".join(s.reasons),
+            "Sentiment":  s.sentiment,
         })
     return pd.DataFrame(rows)
 
@@ -183,6 +187,8 @@ def display_signals(signals: list) -> None:
             print(f"    Stop Loss: {s.stop_loss}  (-{sl_pct:.1f}%)")
             print(f"    R:R Ratio: {s.rr_ratio}:1")
             print(f"    Trend:     {s.trend_bias}  (score {s.trend_score:+d}/8)")
+            if s.sentiment_count > 0:
+                print(f"    Sentiment: {s.sentiment} ({s.sentiment_score:.2f}, {s.sentiment_count} headlines)")
             for r in s.reasons:
                 print(f"    * {r}")
 

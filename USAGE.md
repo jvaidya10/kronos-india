@@ -151,6 +151,19 @@ Output path: `outputs/signals_YYYYMMDD_HHMM_<variant>.csv`
 
 ---
 
+### `--no-sentiment`
+
+Skip the news sentiment analysis step (step 4/6). Useful for faster runs or when offline.
+
+By default, sentiment is **on** — FinBERT classifies recent Google News headlines per stock into BULLISH / BEARISH / NEUTRAL and displays the result alongside each signal. No API key required.
+
+```bash
+python main.py --no-sentiment                    # skip sentiment, faster run
+python main.py --symbols RELIANCE --no-sentiment # quick single-stock test
+```
+
+---
+
 ### `--track`
 
 Log all actionable signals to the prediction tracker database (`outputs/tracker.db`).
@@ -234,6 +247,11 @@ HIGH       : 10 trades | Win rate 80% | Avg P&L +4.1%
 MEDIUM     : 11 trades | Win rate 55% | Avg P&L +1.8%
 LOW        :  3 trades | Win rate 33% | Avg P&L -0.6%
 
+--- By Sentiment ---
+BULLISH  :  9 trades | Win rate 78% | Avg P&L +3.9%
+NEUTRAL  : 11 trades | Win rate 55% | Avg P&L +1.4%
+BEARISH  :  4 trades | Win rate 25% | Avg P&L -1.2%
+
 --- By Cap Tier ---
 LARGE cap  : 10 trades | Win rate 70% | Avg P&L +3.2%
 SMALL cap  :  8 trades | Win rate 50% | Avg P&L +0.8%
@@ -270,6 +288,7 @@ Worst loss run  : 3 in a row
   Stop Loss: 1172.40  (-2.5%)
   R:R Ratio: 2.00:1
   Trend:     BULLISH  (score +5/8)
+  Sentiment: BULLISH (0.81, 5 headlines)
   * Kronos predicts upside 5.8%
   * Monthly: BULLISH (+3.6%) | Weekly: BULLISH (+2.9%)
   * RSI 63.7 | ADX 19.0 | Score +5/8
@@ -285,6 +304,7 @@ Worst loss run  : 3 in a row
 | `Target`         | Price to book profit (5-7% from entry)                          |
 | `Stop Loss`      | Price to exit if trade goes wrong (2.5% from entry)             |
 | `R:R Ratio`      | Reward-to-risk ratio — minimum 2:1 to take the trade            |
+| `Sentiment`      | FinBERT news sentiment — BULLISH / BEARISH / NEUTRAL            |
 | `Trend score`    | -8 (strongly bearish) to +8 (strongly bullish)                  |
 | `RVOL`           | Today's volume vs 20-day average — spike confirms the move      |
 | `OBV`            | On Balance Volume trend — RISING means money flowing in         |

@@ -26,6 +26,7 @@ from data_fetcher import (fetch_ohlcv, prepare_context_and_forecast_timestamps,
 from predictor import load_model, predict_batch
 from signal_generator import generate_signal, display_signals, signals_to_dataframe
 from trend_analyzer import analyze as analyze_trend, display_trend
+from sentiment_analyzer import analyze_batch as analyze_sentiments
 
 CONTEXT_LEN = {"mini": 2048, "small": 512, "base": 512}
 
@@ -48,13 +49,15 @@ def parse_args():
     p.add_argument("--track",   action="store_true", help="Log signals to tracker DB for outcome evaluation")
     p.add_argument("--symbols", nargs="+", default=None,
                    help="Skip scanner — predict specific symbols instead")
+    p.add_argument("--no-sentiment", action="store_true",
+                   help="Skip sentiment analysis (faster runs)")
     return p.parse_args()
 
 
 def get_symbols_from_scanner(top_n: int, cap: str) -> tuple:
     """Returns (flat_symbol_list, tiered_results_dict)."""
     tiers = ["large", "mid", "small"] if cap == "all" else [cap]
-    print(f"\n[1/5] Scanning NSE — top {top_n} gainers & losers per tier: {', '.join(t.upper() for t in tiers)}")
+    print(f"\n[1/6] Scanning NSE — top {top_n} gainers & losers per tier: {', '.join(t.upper() for t in tiers)}")
 
     try:
         results = get_top_gainers_losers(top_n=top_n, tiers=tiers)
@@ -69,8 +72,13 @@ def get_symbols_from_scanner(top_n: int, cap: str) -> tuple:
         return fallback, {}
 
 
+def fetch_sentiments(symbols: list) -> dict:
+    print(f"\n[4/6] Analysing news sentiment for {len(symbols)} stocks...")
+    return analyze_sentiments(symbols)
+
+
 def fetch_all_data(symbols: list, context_len: int, pred_len: int, interval: str) -> list:
-    print(f"\n[2/5] Fetching {interval} candles for {len(symbols)} stocks...")
+    print(f"\n[2/6] Fetching {interval} candles for {len(symbols)} stocks...")
     stocks = []
     for sym in symbols:
         df = fetch_ohlcv(sym, interval=interval)
@@ -85,7 +93,7 @@ def fetch_all_data(symbols: list, context_len: int, pred_len: int, interval: str
 
 
 def fetch_trends(symbols: list) -> dict:
-    print(f"\n[3/5] Analysing weekly & monthly trends for {len(symbols)} stocks...")
+    print(f"\n[3/6] Analysing weekly & monthly trends for {len(symbols)} stocks...")
     trends = {}
     for sym in symbols:
         t = analyze_trend(sym)
@@ -98,13 +106,13 @@ def fetch_trends(symbols: list) -> dict:
 
 
 def run_predictions(stocks: list, sample_count: int) -> dict:
-    print(f"\n[4/5] Running Kronos predictions (samples={sample_count})...")
+    print(f"\n[5/6] Running Kronos predictions (samples={sample_count})...")
     return predict_batch(stocks, sample_count=sample_count)
 
 
 def build_signals(stocks: list, predictions: dict, trends: dict,
-                  scan_results: dict) -> list:
-    print("\n[5/5] Generating trade signals with trend confluence...")
+                  scan_results: dict, sentiments: dict = None) -> list:
+    print("\n[6/6] Generating trade signals with trend confluence...")
 
     # Build symbol → cap_tier lookup
     tier_map = {}
@@ -121,6 +129,11 @@ def build_signals(stocks: list, predictions: dict, trends: dict,
         trend  = trends.get(symbol)
         signal = generate_signal(symbol, pred_df, current_price, trend)
         signal.cap_tier = tier_map.get(symbol, "unknown")
+        if sentiments and symbol in sentiments:
+            s = sentiments[symbol]
+            signal.sentiment       = s.label
+            signal.sentiment_score = s.score
+            signal.sentiment_count = s.count
         signals.append(signal)
     return signals
 
@@ -163,6 +176,8 @@ def display_tiered_signals(signals: list) -> None:
                 print(f"      Stop Loss: {s.stop_loss}  (-{sl_pct:.1f}%)")
                 print(f"      R:R Ratio: {s.rr_ratio}:1")
                 print(f"      Trend:     {s.trend_bias}  (score {s.trend_score:+d})")
+                if s.sentiment_count > 0:
+                    print(f"      Sentiment: {s.sentiment} ({s.sentiment_score:.2f}, {s.sentiment_count} headlines)")
                 for r in s.reasons:
                     print(f"      * {r}")
 
@@ -191,9 +206,12 @@ def save_results(signals: list, variant: str) -> None:
             "R:R":        s.rr_ratio,
             "Confidence": s.confidence,
             "Confluence": s.confluence,
-            "Trend":      s.trend_bias,
-            "Trend Score":s.trend_score,
-            "Reason":     " | ".join(s.reasons),
+            "Trend":           s.trend_bias,
+            "Trend Score":     s.trend_score,
+            "Sentiment":       s.sentiment,
+            "Sentiment Score": s.sentiment_score,
+            "Sentiment Count": s.sentiment_count,
+            "Reason":          " | ".join(s.reasons),
         })
     df = pd.DataFrame(rows)
     ts = datetime.now().strftime("%Y%m%d_%H%M")
@@ -224,7 +242,7 @@ def main():
     if args.symbols:
         symbols = [s.upper() for s in args.symbols]
         scan_results = {}
-        print(f"\n[1/5] Using provided symbols: {', '.join(symbols)}")
+        print(f"\n[1/6] Using provided symbols: {', '.join(symbols)}")
     else:
         symbols, scan_results = get_symbols_from_scanner(args.top, args.cap)
 
@@ -239,8 +257,9 @@ def main():
         sys.exit(1)
 
     trends      = fetch_trends([s[0] for s in stocks])
+    sentiments  = fetch_sentiments([s[0] for s in stocks]) if not args.no_sentiment else {}
     predictions = run_predictions(stocks, args.samples)
-    signals     = build_signals(stocks, predictions, trends, scan_results)
+    signals     = build_signals(stocks, predictions, trends, scan_results, sentiments)
 
     display_tiered_signals(signals)
 
