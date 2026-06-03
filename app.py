@@ -21,9 +21,20 @@ from pipeline.trend_analyzer   import analyze as analyze_trend
 from pipeline.signal_generator import generate_signal
 from pipeline.predictor        import predict_next_day
 from pipeline.sentiment_analyzer import analyze_batch as analyze_sentiments
-from pipeline.symbol_resolver import resolve_symbols
 
 CONTEXT_LEN = {"mini": 2048, "small": 512, "base": 512}
+
+
+@st.cache_data
+def _symbol_options() -> list[str]:
+    """Loads all NSE equities as 'SYMBOL — Company Name' strings for multiselect."""
+    import csv
+    path = os.path.join(APP_DIR, "pipeline", "symbol_names.csv")
+    opts = []
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            opts.append(f"{row['symbol'].strip()} — {row['name'].strip()}")
+    return sorted(opts)
 
 st.set_page_config(page_title="Kronos India", page_icon="📈", layout="wide")
 st.title("📈 Kronos India — NSE Intraday Signal Pipeline")
@@ -188,7 +199,12 @@ with left:
     days    = st.number_input("Predict Days",     min_value=1, max_value=10,  value=3,  step=1)
     samples = st.number_input("Ensemble Samples", min_value=5, max_value=200, value=20, step=5)
     st.markdown("---")
-    symbols_input = st.text_input("Symbols Override (optional)", placeholder="RELIANCE or 'reliance industries tcs infosys'")
+    symbols_selected = st.multiselect(
+        "Symbols Override (optional)",
+        options=_symbol_options(),
+        placeholder="Type symbol or company name to search...",
+        help="Leave empty to run the full NSE scanner. Select one or more stocks to override.",
+    )
     c1, c2, c3 = st.columns(3)
     with c1: save         = st.checkbox("Save CSV")
     with c2: track        = st.checkbox("Track")
@@ -307,8 +323,8 @@ with right:
         # Step 1: Scanner
         main_prog.progress(0.10, text="[1/6] Scanning NSE...")
         scan_results, symbols = {}, []
-        if symbols_input.strip():
-            symbols = resolve_symbols(symbols_input.strip().split())
+        if symbols_selected:
+            symbols = [s.split(" — ")[0] for s in symbols_selected]
             st.info(f"Symbols override: {', '.join(symbols)}")
         else:
             from market_scanner import get_top_gainers_losers
