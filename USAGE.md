@@ -128,13 +128,25 @@ python main.py --samples 50
 ### `--symbols`
 
 Skip the NSE scanner entirely and predict specific stocks directly.
-Accepts one or more NSE ticker symbols (without `.NS`).
+Accepts one or more NSE ticker symbols **or company names** — the pipeline resolves
+names to symbols automatically using a fuzzy index of 2,456 NSE equities.
 
 ```bash
+# By exact symbol
 python main.py --symbols RELIANCE
 python main.py --symbols RELIANCE TCS INFY HDFCBANK
-python main.py --symbols ZOMATO NAUKRI --samples 30
+
+# By company name (partial names work too)
+python main.py --symbols "reliance industries" "hdfc bank" "bajaj finance"
+python main.py --symbols "infosys" "zomato" --samples 30
+
+# Mix of symbols and names
+python main.py --symbols RELIANCE "hdfc bank" INFY
 ```
+
+> If a name is ambiguous or the company uses an abbreviated name in the exchange
+> listing (e.g. TCS is listed as "TCS", SBI as "SBI"), a warning is printed and
+> you can fall back to the exact symbol instead.
 
 ---
 

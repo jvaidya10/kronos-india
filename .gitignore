@@ -41,3 +41,6 @@ build/
 *.safetensors
 *.pt
 *.pth
+
+# Groww instruments master (21 MB raw file — processed into pipeline/symbol_names.csv)
+instrument.csv

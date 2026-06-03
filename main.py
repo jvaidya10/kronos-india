@@ -27,6 +27,7 @@ from pipeline.predictor import load_model, predict_batch
 from pipeline.signal_generator import generate_signal, display_signals, signals_to_dataframe
 from pipeline.trend_analyzer import analyze as analyze_trend, display_trend
 from pipeline.sentiment_analyzer import analyze_batch as analyze_sentiments
+from pipeline.symbol_resolver import resolve_symbols
 
 CONTEXT_LEN = {"mini": 2048, "small": 512, "base": 512}
 
@@ -240,7 +241,7 @@ def main():
 
     # Step 1: Get symbols
     if args.symbols:
-        symbols = [s.upper() for s in args.symbols]
+        symbols = resolve_symbols(args.symbols)
         scan_results = {}
         print(f"\n[1/6] Using provided symbols: {', '.join(symbols)}")
     else:

@@ -156,8 +156,9 @@ python main.py --track
 # Intraday only — 15m candles, predict tomorrow, large cap
 python main.py --interval 15m --days 1 --cap large --track
 
-# Test on specific stocks
+# Test on specific stocks — by symbol or company name
 python main.py --symbols RELIANCE TCS INFY --samples 5
+python main.py --symbols "reliance industries" "hdfc bank" "bajaj finance"
 ```
 
 ---
@@ -172,7 +173,7 @@ python main.py --symbols RELIANCE TCS INFY --samples 5
 | `--interval` | `1h` | Candle size: `1h` · `15m` · `5m` · `1m` |
 | `--days` | `3` | Trading days to predict (1 day = 7/25/75 candles by interval) |
 | `--samples` | `20` | Kronos ensemble samples — more = stable but slower |
-| `--symbols` | — | Skip scanner, predict specific symbols |
+| `--symbols` | — | Skip scanner, predict specific symbols or company names |
 | `--save` | off | Save actionable signals to `outputs/` CSV |
 | `--track` | off | Log signals to tracker DB for outcome evaluation |
 
@@ -348,7 +349,9 @@ kronos-india/
 │   ├── trend_analyzer.py    # RSI, ADX, SMA, RVOL, OBV, momentum scoring
 │   ├── sentiment_analyzer.py# FinBERT news sentiment (Google News RSS)
 │   ├── predictor.py         # Kronos model wrapper (GPU-accelerated)
-│   └── signal_generator.py  # LONG/SHORT signal with entry/target/SL
+│   ├── signal_generator.py  # LONG/SHORT signal with entry/target/SL
+│   ├── symbol_resolver.py   # Company name -> NSE symbol lookup (fuzzy search)
+│   └── symbol_names.csv     # 2,456 NSE equities: symbol + company name
 ├── tests/
 │   └── test_tracker.py  # Unit tests for outcome evaluation and business day logic
 ├── outputs/

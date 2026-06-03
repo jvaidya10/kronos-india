@@ -21,6 +21,7 @@ from pipeline.trend_analyzer   import analyze as analyze_trend
 from pipeline.signal_generator import generate_signal
 from pipeline.predictor        import predict_next_day
 from pipeline.sentiment_analyzer import analyze_batch as analyze_sentiments
+from pipeline.symbol_resolver import resolve_symbols
 
 CONTEXT_LEN = {"mini": 2048, "small": 512, "base": 512}
 
@@ -187,7 +188,7 @@ with left:
     days    = st.number_input("Predict Days",     min_value=1, max_value=10,  value=3,  step=1)
     samples = st.number_input("Ensemble Samples", min_value=5, max_value=200, value=20, step=5)
     st.markdown("---")
-    symbols_input = st.text_input("Symbols Override (optional)", placeholder="RELIANCE TCS INFY")
+    symbols_input = st.text_input("Symbols Override (optional)", placeholder="RELIANCE or 'reliance industries tcs infosys'")
     c1, c2, c3 = st.columns(3)
     with c1: save         = st.checkbox("Save CSV")
     with c2: track        = st.checkbox("Track")
@@ -307,7 +308,7 @@ with right:
         main_prog.progress(0.10, text="[1/6] Scanning NSE...")
         scan_results, symbols = {}, []
         if symbols_input.strip():
-            symbols = [s.upper() for s in symbols_input.strip().split()]
+            symbols = resolve_symbols(symbols_input.strip().split())
             st.info(f"Symbols override: {', '.join(symbols)}")
         else:
             from market_scanner import get_top_gainers_losers
