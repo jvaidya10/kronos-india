@@ -249,8 +249,7 @@ def _next_market_open(logged_at: str) -> str:
 def _fetch_actual(symbol: str, from_dt: str, to_dt: str,
                   interval: str = "1h") -> Optional[pd.DataFrame]:
     """Fetches OHLCV at the signal's own interval between from_dt and to_dt."""
-    sys.path.insert(0, os.path.dirname(__file__))
-    from data_fetcher import fetch_ohlcv
+    from pipeline.data_fetcher import fetch_ohlcv
     df = fetch_ohlcv(symbol, interval=interval)
     if df is None:
         return None

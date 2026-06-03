@@ -337,17 +337,18 @@ Worst loss run  : 3 in a row
 
 ```text
 kronos-india/
-├── main.py              # Pipeline orchestrator — entry point
+├── main.py              # CLI entry point — orchestrates the full pipeline
 ├── app.py               # Streamlit web dashboard
-├── market_scanner.py    # NSE gainers/losers by cap tier
-├── data_fetcher.py      # Historical OHLCV via yfinance (multi-interval)
-├── trend_analyzer.py    # RSI, ADX, SMA, RVOL, OBV, momentum scoring
-├── sentiment_analyzer.py# FinBERT news sentiment (Google News RSS)
-├── predictor.py         # Kronos model wrapper (GPU-accelerated)
-├── signal_generator.py  # LONG/SHORT signal with entry/target/SL
 ├── tracker.py           # Signal logger + outcome evaluator + report
 ├── requirements.txt     # Python dependencies
 ├── USAGE.md             # Full argument reference
+├── pipeline/            # Internal pipeline modules
+│   ├── market_scanner.py    # NSE gainers/losers by cap tier
+│   ├── data_fetcher.py      # Historical OHLCV via yfinance (multi-interval)
+│   ├── trend_analyzer.py    # RSI, ADX, SMA, RVOL, OBV, momentum scoring
+│   ├── sentiment_analyzer.py# FinBERT news sentiment (Google News RSS)
+│   ├── predictor.py         # Kronos model wrapper (GPU-accelerated)
+│   └── signal_generator.py  # LONG/SHORT signal with entry/target/SL
 ├── tests/
 │   └── test_tracker.py  # Unit tests for outcome evaluation and business day logic
 ├── outputs/

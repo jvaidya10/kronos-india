@@ -18,15 +18,15 @@ import sys
 import pandas as pd
 from datetime import datetime
 
-from market_scanner import (
+from pipeline.market_scanner import (
     get_top_gainers_losers, display_scanner_results, all_symbols_from_results
 )
-from data_fetcher import (fetch_ohlcv, prepare_context_and_forecast_timestamps,
-                          get_current_price, CANDLES_PER_DAY)
-from predictor import load_model, predict_batch
-from signal_generator import generate_signal, display_signals, signals_to_dataframe
-from trend_analyzer import analyze as analyze_trend, display_trend
-from sentiment_analyzer import analyze_batch as analyze_sentiments
+from pipeline.data_fetcher import (fetch_ohlcv, prepare_context_and_forecast_timestamps,
+                                   get_current_price, CANDLES_PER_DAY)
+from pipeline.predictor import load_model, predict_batch
+from pipeline.signal_generator import generate_signal, display_signals, signals_to_dataframe
+from pipeline.trend_analyzer import analyze as analyze_trend, display_trend
+from pipeline.sentiment_analyzer import analyze_batch as analyze_sentiments
 
 CONTEXT_LEN = {"mini": 2048, "small": 512, "base": 512}
 
