@@ -122,18 +122,31 @@ def _next_business_days(from_date: datetime, n: int) -> datetime:
     return d
 
 
+_MARKET_CLOSE_HOUR   = 15
+_MARKET_CLOSE_MINUTE = 30
+
+
 def _nth_trading_day_from(from_date: datetime, n: int) -> datetime:
     """Returns the nth trading day ON OR AFTER from_date (1-indexed).
 
-    Unlike _next_business_days (which always advances), this counts from_date
-    itself as day 1 when it is a trading day.  This means pred_days=1 evaluates
-    on the same calendar day the signal was generated, enabling same-day
-    evaluation for intraday runs before market open.
+    Today counts as day 1 only when the market session is still open or not yet
+    started (i.e. from_date is before 15:30).  Signals generated after market
+    close belong to the next session, so today is skipped in that case.
     """
+    market_close = from_date.replace(
+        hour=_MARKET_CLOSE_HOUR, minute=_MARKET_CLOSE_MINUTE,
+        second=0, microsecond=0,
+    )
     d = from_date.replace(hour=0, minute=0, second=0, microsecond=0)
-    # Snap to first trading day on or after from_date
+
+    # If generated after market close, today's session is over — skip to tomorrow
+    if from_date >= market_close:
+        d += timedelta(days=1)
+
+    # Snap to first trading day on or after d
     while not _is_trading_day(d):
         d += timedelta(days=1)
+
     # Advance n-1 more trading days
     count = 1
     while count < n:

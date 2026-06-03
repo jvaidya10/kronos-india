@@ -198,6 +198,24 @@ class TestNthTradingDayFrom:
         result = _nth_trading_day_from(monday_7am, 1)
         assert result.date() == monday_7am.date()
 
+    def test_post_close_advances_to_next_day(self):
+        # 17:11 run on Tuesday — market already closed → eval_by = Wednesday
+        tuesday_post_close = datetime(2025, 6, 3, 17, 11, 0)
+        result = _nth_trading_day_from(tuesday_post_close, 1)
+        assert result == datetime(2025, 6, 4)  # Wednesday
+
+    def test_exactly_at_market_close_advances(self):
+        # 15:30 exactly — session is closed → next trading day
+        monday_close = datetime(2025, 6, 2, 15, 30, 0)
+        result = _nth_trading_day_from(monday_close, 1)
+        assert result == datetime(2025, 6, 3)  # Tuesday
+
+    def test_one_minute_before_close_stays_today(self):
+        # 15:29 — session still open → same day
+        monday_before_close = datetime(2025, 6, 2, 15, 29, 0)
+        result = _nth_trading_day_from(monday_before_close, 1)
+        assert result == datetime(2025, 6, 2)
+
 
 # ── _next_market_open ─────────────────────────────────────────────────────────
 
