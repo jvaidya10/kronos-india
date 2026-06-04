@@ -563,14 +563,111 @@ def show() -> None:
     print()
 
 
+# ─── CSV Import ───────────────────────────────────────────────────────────────
+
+def import_csv(csv_path: str, pred_days: int = 3, interval: str = "1h") -> None:
+    """
+    Imports signals from a saved CSV into the tracker DB.
+    logged_at is parsed from the filename (signals_YYYYMMDD_HHMM_*.csv);
+    falls back to current time if the filename doesn't match that pattern.
+    Skips rows that are already in the DB (same symbol + direction + logged_at).
+    """
+    import re
+
+    if not os.path.isfile(csv_path):
+        print(f"  [Tracker] File not found: {csv_path}")
+        return
+
+    df = pd.read_csv(csv_path)
+    df.columns = [c.strip() for c in df.columns]
+
+    required = {"Symbol", "Direction", "Entry", "Target", "Stop Loss"}
+    missing = required - set(df.columns)
+    if missing:
+        print(f"  [Tracker] CSV is missing columns: {missing}")
+        return
+
+    # Parse logged_at from filename: signals_YYYYMMDD_HHMM_*.csv
+    fname = os.path.basename(csv_path)
+    m = re.search(r"signals_(\d{8})_(\d{4})", fname)
+    if m:
+        logged_at = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M")
+    else:
+        logged_at = datetime.now()
+        print(f"  [Tracker] Could not parse timestamp from filename — using now as logged_at")
+
+    eval_by = _nth_trading_day_from(logged_at, pred_days)
+
+    init_db()
+    inserted = skipped = 0
+
+    with _conn() as con:
+        for _, row in df.iterrows():
+            if str(row.get("Direction", "")).strip() in ("NO TRADE", "", "nan"):
+                continue
+
+            symbol    = str(row["Symbol"]).strip()
+            direction = str(row["Direction"]).strip()
+            entry     = float(row["Entry"])
+            target    = float(row["Target"])
+            stop_loss = float(row["Stop Loss"])
+
+            # Duplicate check
+            exists = con.execute(
+                "SELECT 1 FROM signals WHERE symbol=? AND direction=? AND logged_at=?",
+                (symbol, direction, logged_at.strftime("%Y-%m-%d %H:%M")),
+            ).fetchone()
+            if exists:
+                skipped += 1
+                continue
+
+            tgt_pct = abs((target - entry) / entry * 100) if entry else 0
+            sl_pct  = abs((stop_loss - entry) / entry * 100) if entry else 0
+            rr      = round(tgt_pct / sl_pct, 2) if sl_pct else 0
+
+            con.execute("""
+                INSERT INTO signals
+                (logged_at, eval_by, symbol, cap_tier, direction,
+                 entry, target, stop_loss, target_pct, stoploss_pct,
+                 rr_ratio, pred_days, interval, confidence, confluence,
+                 trend_bias, trend_score, sentiment, sentiment_score, sentiment_count)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                logged_at.strftime("%Y-%m-%d %H:%M"),
+                eval_by.strftime("%Y-%m-%d"),
+                symbol,
+                str(row.get("Cap Tier", "")).strip(),
+                direction,
+                entry, target, stop_loss,
+                round(tgt_pct, 2), round(sl_pct, 2),
+                rr, pred_days, interval,
+                str(row.get("Confidence", "")).strip() or None,
+                str(row.get("Confluence", "")).strip() or None,
+                str(row.get("Trend", "")).strip() or None,
+                int(row["Trend Score"]) if "Trend Score" in df.columns and pd.notna(row.get("Trend Score")) else None,
+                str(row.get("Sentiment", "NEUTRAL")).strip() or "NEUTRAL",
+                float(row["Sentiment Score"]) if "Sentiment Score" in df.columns and pd.notna(row.get("Sentiment Score")) else 0.0,
+                int(row["Sentiment Count"]) if "Sentiment Count" in df.columns and pd.notna(row.get("Sentiment Count")) else 0,
+            ))
+            inserted += 1
+
+    print(f"  [Tracker] Imported {inserted} signal(s) from {fname}"
+          + (f" | {skipped} duplicate(s) skipped" if skipped else "")
+          + f" — evaluate after {eval_by.strftime('%d %b %Y')}")
+
+
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Kronos Prediction Tracker")
-    p.add_argument("command", choices=["evaluate", "report", "show"],
-                   help="evaluate: check outcomes | report: stats | show: list signals")
+    p.add_argument("command", choices=["evaluate", "report", "show", "import"],
+                   help="evaluate: check outcomes | report: stats | show: list signals | import: load from CSV")
     p.add_argument("--force", action="store_true",
                    help="Evaluate all pending signals regardless of eval_by date")
+    p.add_argument("--csv",      default=None, help="Path to CSV file (for import command)")
+    p.add_argument("--days",     type=int, default=3, help="Prediction horizon in trading days (for import, default 3)")
+    p.add_argument("--interval", default="1h", choices=["1h", "15m", "5m", "1m"],
+                   help="Candle interval (for import, default 1h)")
     args = p.parse_args()
 
     if args.command == "evaluate":
@@ -579,3 +676,7 @@ if __name__ == "__main__":
         report()
     elif args.command == "show":
         show()
+    elif args.command == "import":
+        if not args.csv:
+            p.error("import requires --csv <path>")
+        import_csv(args.csv, pred_days=args.days, interval=args.interval)

@@ -669,6 +669,47 @@ with b4:
     if st.button("Show Signals", use_container_width=True):
         st.session_state.tracker_view = "show"
 
+# Import CSV
+import glob as _glob
+_csv_files = sorted(
+    _glob.glob(os.path.join(APP_DIR, "outputs", "signals_*.csv")),
+    reverse=True,
+)
+if _csv_files:
+    with st.expander("Import CSV into Tracker"):
+        _sel_csv = st.selectbox(
+            "Select saved CSV",
+            options=_csv_files,
+            format_func=os.path.basename,
+            key="import_csv_select",
+        )
+        _ic1, _ic2, _ic3 = st.columns([1, 1, 1])
+        with _ic1:
+            _imp_days = st.number_input("Pred days", min_value=1, max_value=10,
+                                        value=3, key="import_days")
+        with _ic2:
+            _imp_interval = st.selectbox("Interval", ["1h", "15m", "5m", "1m"],
+                                         key="import_interval")
+        with _ic3:
+            st.write("")
+            st.write("")
+            _do_import = st.button("Import", use_container_width=True, key="do_import")
+
+        if _do_import and _sel_csv:
+            from tracker import import_csv as _import_csv
+            import io as _io
+            _buf = _io.StringIO()
+            import sys as _sys
+            _old_stdout = _sys.stdout
+            _sys.stdout = _buf
+            _import_csv(_sel_csv, pred_days=int(_imp_days), interval=_imp_interval)
+            _sys.stdout = _old_stdout
+            _msg = _buf.getvalue().strip()
+            if "Imported" in _msg:
+                st.success(_msg)
+            else:
+                st.warning(_msg)
+
 # Render active view
 _view = st.session_state.tracker_view
 if   _view == "evaluate": _render_evaluate()
