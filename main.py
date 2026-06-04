@@ -5,7 +5,7 @@ NSE Intraday Signal Pipeline using Kronos Foundation Model
 2. Fetches historical hourly OHLCV for each stock
 3. Analyses weekly + monthly trend (RSI, SMA, ADX, momentum)
 4. Runs Kronos to predict tomorrow's intraday candles
-5. Generates trade signals with 5-7% target and 2-3% stop-loss
+5. Generates trade signals — target = Kronos predicted range, stop capped at 2.5%
 
 Usage:
     python main.py [--variant small|mini|base] [--top N] [--samples N]

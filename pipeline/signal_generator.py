@@ -1,6 +1,8 @@
 """
 Converts Kronos price predictions into actionable trade signals.
-Risk/reward: Target 5-7% profit, fixed 2.5% stop-loss.
+Target and stop-loss are Kronos-native: target = the model's predicted extreme
+(pred_high for LONG, pred_low for SHORT), stop = the opposite extreme clamped to
+a risk ceiling. No hardcoded profit magnitude.
 Incorporates weekly + monthly trend confluence from trend_analyzer.
 """
 
@@ -12,10 +14,10 @@ if TYPE_CHECKING:
     from trend_analyzer import TrendSnapshot
 
 
-TARGET_MIN_PCT = 5.0
-TARGET_MAX_PCT = 7.0
-STOPLOSS_PCT   = 2.5
-MIN_RR_RATIO   = 2.0
+MIN_MOVE_PCT = 1.5   # noise filter — ignore predicted moves below this
+SL_CAP_PCT   = 2.5   # max risk per trade (stop-loss ceiling)
+SL_FLOOR_PCT = 1.0   # whipsaw protection (stop-loss floor)
+MIN_RR_RATIO = 2.0   # reject setups below this reward:risk
 
 
 @dataclass
@@ -79,14 +81,18 @@ def generate_signal(
     trend_bias   = trend.overall_bias if trend else "UNKNOWN"
     trend_score  = trend.score        if trend else 0
 
-    def _make(direction, move_pct):
+    def _make(direction, move_pct, opposite_pct):
+        # opposite_pct = Kronos's predicted move toward the stop side.
+        # Clamp it to a risk band: never riskier than SL_CAP, never tighter than SL_FLOOR.
+        sl_pct = min(max(opposite_pct, SL_FLOOR_PCT), SL_CAP_PCT)
+
         if direction == "LONG":
-            target    = round(entry * (1 + min(move_pct, TARGET_MAX_PCT) / 100), 2)
-            stop_loss = round(entry * (1 - STOPLOSS_PCT / 100), 2)
+            target    = round(pred_high, 2)
+            stop_loss = round(entry * (1 - sl_pct / 100), 2)
             risk, reward = entry - stop_loss, target - entry
         else:
-            target    = round(entry * (1 - min(move_pct, TARGET_MAX_PCT) / 100), 2)
-            stop_loss = round(entry * (1 + STOPLOSS_PCT / 100), 2)
+            target    = round(pred_low, 2)
+            stop_loss = round(entry * (1 + sl_pct / 100), 2)
             risk, reward = stop_loss - entry, entry - target
 
         rr         = round(reward / risk, 2) if risk > 0 else 0
@@ -112,7 +118,8 @@ def generate_signal(
                 reasons=[f"R:R {rr} below minimum {MIN_RR_RATIO}"],
             )
 
-        reasons = [f"Kronos predicts {'upside' if direction=='LONG' else 'downside'} {move_pct:.1f}%"]
+        reasons = [f"Kronos predicts {'upside' if direction=='LONG' else 'downside'} {move_pct:.1f}% "
+                   f"(target {move_pct:.1f}% / stop {sl_pct:.1f}%)"]
         if trend:
             reasons.append(f"Monthly: {trend.monthly_bias} ({trend.monthly_chg_pct:+.1f}%) | Weekly: {trend.weekly_bias} ({trend.weekly_chg_pct:+.1f}%)")
             reasons.append(f"RSI {trend.rsi14} | ADX {trend.adx14} | Score {trend_score:+d}/8")
@@ -127,11 +134,11 @@ def generate_signal(
             confluence=confluence, reasons=reasons,
         )
 
-    if upside_pct >= TARGET_MIN_PCT and upside_pct > downside_pct:
-        return _make("LONG", upside_pct)
+    if upside_pct >= MIN_MOVE_PCT and upside_pct > downside_pct:
+        return _make("LONG", upside_pct, downside_pct)
 
-    if downside_pct >= TARGET_MIN_PCT and downside_pct > upside_pct:
-        return _make("SHORT", downside_pct)
+    if downside_pct >= MIN_MOVE_PCT and downside_pct > upside_pct:
+        return _make("SHORT", downside_pct, upside_pct)
 
     return TradeSignal(
         symbol=symbol, direction="NO TRADE",
@@ -170,7 +177,7 @@ def display_signals(signals: list) -> None:
 
     print("\n" + "="*70)
     print("  ACTIONABLE TRADE SIGNALS")
-    print(f"  SL: {STOPLOSS_PCT}%  |  Target: {TARGET_MIN_PCT}-{TARGET_MAX_PCT}%  |  Min R:R {MIN_RR_RATIO}:1")
+    print(f"  Target: Kronos range (min {MIN_MOVE_PCT}%)  |  Max SL {SL_CAP_PCT}%  |  Min R:R {MIN_RR_RATIO}:1")
     print("="*70)
 
     if not actionable:

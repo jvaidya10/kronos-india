@@ -54,7 +54,7 @@ This project wraps Kronos into a complete signal generation and tracking system 
 2. **Analyses trends** using RSI, ADX, SMA20/50, weekly/monthly momentum, RVOL, and OBV
 3. **Analyses sentiment** using FinBERT on recent Google News headlines — BULLISH / BEARISH / NEUTRAL per stock
 4. **Predicts price** using Kronos — fed the last 512 candles of OHLCV history at your chosen interval
-5. **Generates signals** with entry, target (5–7%), stop-loss (2.5%), and R:R ratio — only when Kronos and the trend agree
+5. **Generates signals** with entry, a Kronos-native target (the model's own predicted high/low — no fixed cap), a stop-loss clamped to a 1.0–2.5% risk band, and R:R ratio — only when Kronos and the trend agree
 6. **Tracks outcomes** over time to measure real-world accuracy against actual market data
 
 ---
@@ -219,21 +219,29 @@ python main.py --symbols "reliance industries" "hdfc bank" "bajaj finance"
 
 ======================================================================
   ACTIONABLE TRADE SIGNALS (Next 1 Trading Day)
-  SL: 2.5%  |  Target: 5.0-7.0%  |  Min R:R 2.0:1
+  Target: Kronos range (min 1.5%)  |  Max SL 2.5%  |  Min R:R 2.0:1
 ======================================================================
 
   [BUY  ^] TECHM  [HIGH confidence]  Confluence: STRONG ***
     Entry:     1543.20
-    Target:    1620.36  (+5.0%)
+    Target:    1638.88  (+6.2%)
     Stop Loss: 1504.62  (-2.5%)
-    R:R Ratio: 2.01:1
+    R:R Ratio: 2.48:1
     Trend:     STRONGLY BULLISH  (score +7/8)
     Sentiment: BULLISH (0.79, 6 headlines)
-    * Kronos predicts upside 6.2%
+    * Kronos predicts upside 6.2% (target 6.2% / stop 2.5%)
     * Monthly: BULLISH (+6.6%) | Weekly: BULLISH (+7.7%)
     * RSI 77.28 | ADX 14.3 | Score +7/8
     * RVOL 1.77x [VOLUME SPIKE — confirms move] | OBV RISING
 ```
+
+> **Why the target isn't a fixed percentage:** Kronos forecasts a full price
+> range, so the target is its predicted high (long) or low (short) and the stop
+> is its predicted opposite extreme, clamped to a 1.0–2.5% risk band. A fixed
+> 5–7% target both missed real 2–4% large-cap moves (filtered out as NO TRADE)
+> and clipped the occasional 8–10% move. Letting Kronos's own range drive the
+> levels also makes the 2:1 reward:risk filter meaningful. See
+> [USAGE.md](USAGE.md#how-targets-and-stops-are-set-and-why) for the full rationale.
 
 ---
 
@@ -287,6 +295,9 @@ python tracker.py show
 
 # Force-evaluate overdue signals skipped due to data gaps
 python tracker.py evaluate --force
+
+# Import a saved CSV into the tracker (for runs done without --track)
+python tracker.py import --csv outputs/signals_YYYYMMDD_HHMM_<variant>.csv
 ```
 
 ### Report example

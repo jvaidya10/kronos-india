@@ -237,7 +237,25 @@ python tracker.py show
 # Force-evaluate signals whose eval_by has passed but were skipped due to data gaps
 # (signals with eval_by still in the future are skipped with a clear message)
 python tracker.py evaluate --force
+
+# Import a saved signals CSV into the tracker (for runs done without --track)
+python tracker.py import --csv outputs/signals_20260604_0410_base.csv
+python tracker.py import --csv outputs/signals_...csv --days 1 --interval 15m
 ```
+
+### Importing CSVs
+
+If you ran the pipeline with `--save` but forgot `--track`, the signals only
+exist in the CSV. The `import` command loads them into `tracker.db` so they can
+be evaluated and reported like any tracked signal:
+
+- `logged_at` is parsed from the filename timestamp (`signals_YYYYMMDD_HHMM_*.csv`)
+- `eval_by` is computed from `--days` (default 3) using NSE holiday-aware business days
+- `--interval` sets which candle size to replay during evaluation (default `1h`)
+- Duplicate rows (same symbol + direction + logged_at) are skipped, so re-importing is safe
+
+In the Streamlit dashboard, the same feature appears as an **"Import CSV into
+Tracker"** expander in the Tracker section whenever saved CSVs exist.
 
 ### Report output
 
@@ -296,12 +314,12 @@ Worst loss run  : 3 in a row
 ```text
 [BUY  ^] INFY  [HIGH confidence]  Confluence: STRONG ***
   Entry:     1202.50
-  Target:    1262.60  (+5.0%)
-  Stop Loss: 1172.40  (-2.5%)
-  R:R Ratio: 2.00:1
+  Target:    1237.40  (+2.9%)
+  Stop Loss: 1190.50  (-1.0%)
+  R:R Ratio: 2.90:1
   Trend:     BULLISH  (score +5/8)
   Sentiment: BULLISH (0.81, 5 headlines)
-  * Kronos predicts upside 5.8%
+  * Kronos predicts upside 2.9% (target 2.9% / stop 1.0%)
   * Monthly: BULLISH (+3.6%) | Weekly: BULLISH (+2.9%)
   * RSI 63.7 | ADX 19.0 | Score +5/8
   * RVOL 2.1x [VOLUME SPIKE - confirms move] | OBV RISING
@@ -313,8 +331,8 @@ Worst loss run  : 3 in a row
 | `Confidence`     | How closely Kronos's samples agreed (HIGH / MEDIUM / LOW)       |
 | `Confluence`     | Alignment between Kronos signal and weekly + monthly trend      |
 | `Entry`          | Current price — your trade entry                                |
-| `Target`         | Price to book profit (5-7% from entry)                          |
-| `Stop Loss`      | Price to exit if trade goes wrong (2.5% from entry)             |
+| `Target`         | Kronos's predicted high (LONG) or low (SHORT) — no fixed cap    |
+| `Stop Loss`      | Kronos's opposite extreme, clamped to 1.0–2.5% risk band        |
 | `R:R Ratio`      | Reward-to-risk ratio — minimum 2:1 to take the trade            |
 | `Sentiment`      | FinBERT news sentiment — BULLISH / BEARISH / NEUTRAL            |
 | `Trend score`    | -8 (strongly bearish) to +8 (strongly bullish)                  |
@@ -329,6 +347,52 @@ Worst loss run  : 3 in a row
 | `MODERATE **` | Trend score +1 or +2 (LONG) or -1 or -2 (SHORT) — leans same way |
 | `WEAK *` | Trend score 0 — neutral, take smaller position |
 | `AGAINST TREND` | Trend opposes signal direction — trade blocked, shown as NO TRADE |
+
+---
+
+## How Targets and Stops Are Set (and why)
+
+Kronos forecasts a full OHLCV range for the prediction window — both a predicted
+high and a predicted low. The signal generator uses **both**, instead of imposing
+fixed profit/loss percentages.
+
+| | Target | Stop-loss |
+| --- | --- | --- |
+| LONG | `pred_high` (Kronos's predicted peak) | `pred_low`, clamped to the 1.0–2.5% risk band |
+| SHORT | `pred_low` (Kronos's predicted trough) | `pred_high`, clamped to the 1.0–2.5% risk band |
+
+A signal only fires if the predicted move toward the target is at least
+**1.5%** (noise filter) and the resulting reward:risk is at least **2:1**.
+
+**Why this replaced the old fixed 5–7% target / 2.5% stop:**
+
+- **The old 5% minimum missed real moves.** Large- and mid-cap stocks (TECHM,
+  INFY, HCLTECH) routinely move 2–4% intraday but rarely 5%+. Those valid,
+  correctly-predicted moves were discarded as `NO TRADE`. In one tracked run, 13
+  of 14 signals expired with the stock moving the *right* direction (e.g. THERMAX
+  +2.7%) but never reaching the 7% target — a 0% win rate despite correct
+  direction calls.
+- **The old 7% cap clipped the big winners.** When Kronos predicts a large move
+  (e.g. an 8–10% fall, as has happened on large caps), capping the target at 7%
+  left profit on the table and understated the trade's true reward:risk.
+- **A stop derived from the prediction is meaningful.** The stop now sits at the
+  level where Kronos's own forecast is invalidated (its predicted opposite
+  extreme), not at an arbitrary fixed percentage. Because it varies per stock,
+  the R:R filter now does real work — it rejects setups where the predicted risk
+  is large relative to the predicted reward, instead of every trade passing at a
+  constant 2.0.
+
+**The two clamps are safety rails, not the main logic:**
+
+- `SL_CAP_PCT = 2.5` — caps maximum loss per trade. If Kronos predicts a downside
+  larger than 2.5% on a long, the stop is held at 2.5% (a transient predicted dip
+  could stop you out early — the accepted cost of a hard risk ceiling).
+- `SL_FLOOR_PCT = 1.0` — prevents a too-tight stop on a narrow predicted range,
+  which would whipsaw out on normal intraday noise.
+
+These four constants live at the top of `pipeline/signal_generator.py`
+(`MIN_MOVE_PCT`, `SL_CAP_PCT`, `SL_FLOOR_PCT`, `MIN_RR_RATIO`) and can be tuned
+once enough tracked signals reveal the best thresholds.
 
 ---
 
