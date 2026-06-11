@@ -48,6 +48,30 @@ python main.py --cap small
 
 ---
 
+### `--universe`
+
+Chooses the stock universe. This is the most important lever for signal quality.
+
+- **`scanner`** *(default)* — ranks each cap tier's biggest gainers & losers by
+  today's % move, i.e. the day's most *volatile* movers.
+- **`nifty50`** — runs a **fixed** list of Nifty 50 constituents, no ranking.
+- **`nifty100`** — runs a **fixed** list of Nifty 100 constituents.
+
+**Why this matters:** the `scanner` selects stocks *because* they moved the most
+today — by construction the volatile, news-driven names. Backtests and live
+tracking both show Kronos has a (small) directional edge on **calm, liquid
+large-caps** and essentially none on volatile movers. The `nifty50` / `nifty100`
+universes point the model at the stocks it predicts best, instead of the day's
+chaos. The constituent lists are fetched live from NSE (with a hardcoded
+fallback). `--cap` and `--top` are ignored when a fixed universe is selected.
+
+```bash
+python main.py --universe nifty50              # fixed liquid large-caps
+python main.py --universe nifty100 --interval 1h --track
+```
+
+---
+
 ### `--top`
 
 How many top gainers and top losers to pick **per cap tier**.

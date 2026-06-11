@@ -15,6 +15,7 @@ from typing import Dict, Tuple
 
 # NSE public CSVs — no auth required
 NSE_INDEX_CSVS = {
+    "nifty50": "https://archives.nseindia.com/content/indices/ind_nifty50list.csv",
     "large": "https://archives.nseindia.com/content/indices/ind_nifty100list.csv",
     "mid":   "https://archives.nseindia.com/content/indices/ind_niftymidcap150list.csv",
     "small": "https://archives.nseindia.com/content/indices/ind_niftysmallcap250list.csv",
@@ -22,6 +23,18 @@ NSE_INDEX_CSVS = {
 
 # Fallbacks if NSE archive is unreachable
 FALLBACK = {
+    # Nifty 50 — snapshot (early 2026). Fetched live from NSE when reachable;
+    # update on index rebalances (semi-annual). All are liquid large-caps, which
+    # is what matters for using this as a stable universe.
+    "nifty50": [
+        "ADANIENT","ADANIPORTS","APOLLOHOSP","ASIANPAINT","AXISBANK","BAJAJ-AUTO",
+        "BAJFINANCE","BAJAJFINSV","BEL","BHARTIARTL","BPCL","CIPLA","COALINDIA",
+        "DRREDDY","EICHERMOT","GRASIM","HCLTECH","HDFCBANK","HDFCLIFE","HEROMOTOCO",
+        "HINDALCO","HINDUNILVR","ICICIBANK","INDUSINDBK","INFY","ITC","JIOFIN",
+        "JSWSTEEL","KOTAKBANK","LT","M&M","MARUTI","NESTLEIND","NTPC","ONGC",
+        "POWERGRID","RELIANCE","SBILIFE","SBIN","SHRIRAMFIN","SUNPHARMA","TATACONSUM",
+        "TATAMOTORS","TATASTEEL","TCS","TECHM","TITAN","TRENT","ULTRACEMCO","WIPRO",
+    ],
     "large": [
         "RELIANCE","TCS","HDFCBANK","BHARTIARTL","ICICIBANK","INFY","SBIN",
         "HINDUNILVR","ITC","LT","KOTAKBANK","HCLTECH","AXISBANK","MARUTI",
@@ -73,6 +86,23 @@ def _fetch_nse_constituents(tier: str) -> list:
         pass
     print(f"  [WARN] Could not fetch {tier}-cap list from NSE — using fallback list.")
     return FALLBACK[tier]
+
+
+def get_universe(name: str) -> list:
+    """
+    Returns a fixed list of symbols for a named universe — NO gainer/loser
+    ranking. Unlike the scanner (which selects the day's most volatile movers),
+    this gives a stable liquid large-cap watchlist, where Kronos has its edge.
+
+      'nifty50'  -> Nifty 50 constituents
+      'nifty100' -> Nifty 100 constituents (the large-cap tier)
+
+    Fetched live from NSE archives, with a hardcoded fallback.
+    """
+    key = {"nifty50": "nifty50", "nifty100": "large"}.get(name)
+    if key is None:
+        raise ValueError(f"Unknown universe '{name}'. Choose: nifty50, nifty100")
+    return _fetch_nse_constituents(key)
 
 
 def _get_price_changes(symbols: list) -> pd.DataFrame:

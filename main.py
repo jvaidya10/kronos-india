@@ -20,7 +20,8 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from pipeline.market_scanner import (
-    get_top_gainers_losers, display_scanner_results, all_symbols_from_results
+    get_top_gainers_losers, display_scanner_results, all_symbols_from_results,
+    get_universe
 )
 from pipeline.data_fetcher import (fetch_ohlcv, prepare_context_and_forecast_timestamps,
                                    get_current_price, CANDLES_PER_DAY)
@@ -41,6 +42,11 @@ def parse_args():
     p.add_argument("--cap",     default="all",
                    choices=["large", "mid", "small", "all"],
                    help="Cap tier to scan (default: all)")
+    p.add_argument("--universe", default="scanner",
+                   choices=["scanner", "nifty50", "nifty100"],
+                   help="Stock universe. 'scanner' (default) ranks gainers/losers; "
+                        "'nifty50'/'nifty100' run a fixed liquid large-cap list (no "
+                        "volatility selection — where Kronos has its edge).")
     p.add_argument("--interval", default="1h", choices=["1h", "15m", "5m", "1m"],
                    help="Candle interval (default: 1h). Use 15m/5m for detailed intraday.")
     p.add_argument("--days",    type=int, default=3,
@@ -143,7 +149,8 @@ def run_predictions(stocks: list, sample_count: int) -> dict:
 
 
 def build_signals(stocks: list, predictions: dict, trends: dict,
-                  scan_results: dict, prices: dict, sentiments: dict = None) -> list:
+                  scan_results: dict, prices: dict, sentiments: dict = None,
+                  default_tier: str = "unknown") -> list:
     print("\n[6/6] Generating trade signals with trend confluence...")
 
     # Build symbol → cap_tier lookup
@@ -160,7 +167,7 @@ def build_signals(stocks: list, predictions: dict, trends: dict,
         current_price = prices.get(symbol)
         trend  = trends.get(symbol)
         signal = generate_signal(symbol, pred_df, current_price, trend)
-        signal.cap_tier = tier_map.get(symbol, "unknown")
+        signal.cap_tier = tier_map.get(symbol, default_tier)
         if sentiments and symbol in sentiments:
             s = sentiments[symbol]
             signal.sentiment       = s.label
@@ -271,10 +278,17 @@ def main():
         sys.exit(1)
 
     # Step 1: Get symbols
+    default_tier = "unknown"
     if args.symbols:
         symbols = resolve_symbols(args.symbols)
         scan_results = {}
         print(f"\n[1/6] Using provided symbols: {', '.join(symbols)}")
+    elif args.universe != "scanner":
+        symbols = get_universe(args.universe)
+        scan_results = {}
+        default_tier = "large"
+        print(f"\n[1/6] Using {args.universe.upper()} universe — {len(symbols)} liquid large-caps "
+              f"(no gainer/loser ranking)")
     else:
         symbols, scan_results = get_symbols_from_scanner(args.top, args.cap)
 
@@ -293,7 +307,8 @@ def main():
     sentiments  = fetch_sentiments(data_syms, args.workers) if not args.no_sentiment else {}
     prices      = _parallel(get_current_price, data_syms, args.workers, "Price")
     predictions = run_predictions(stocks, args.samples)
-    signals     = build_signals(stocks, predictions, trends, scan_results, prices, sentiments)
+    signals     = build_signals(stocks, predictions, trends, scan_results, prices,
+                                sentiments, default_tier=default_tier)
 
     display_tiered_signals(signals)
 

@@ -59,6 +59,7 @@ _PRED_DEFAULTS = {
     "pred_variant":       "small",
     "pred_sentiments":    {},
     "pred_no_sentiment":  False,
+    "pred_default_tier":  "unknown",
 }
 for _k, _v in _PRED_DEFAULTS.items():
     st.session_state.setdefault(_k, _v)
@@ -113,7 +114,8 @@ def _style_signals(df: pd.DataFrame):
 
 # ── Signal display helper ─────────────────────────────────────────────────────
 
-def _show_signals(predictions, trends, scan_results, stocks, save, track, days, interval, variant, sentiments=None):
+def _show_signals(predictions, trends, scan_results, stocks, save, track, days, interval, variant,
+                  sentiments=None, default_tier="unknown"):
     tier_map = {}
     for tier, (g, l) in scan_results.items():
         for sym in pd.concat([g, l])["symbol"].tolist():
@@ -125,7 +127,7 @@ def _show_signals(predictions, trends, scan_results, stocks, save, track, days, 
         if pred_df is None:
             continue
         sig          = generate_signal(sym, pred_df, get_current_price(sym), trends.get(sym))
-        sig.cap_tier = tier_map.get(sym, "unknown")
+        sig.cap_tier = tier_map.get(sym, default_tier)
         if sentiments and sym in sentiments:
             s = sentiments[sym]
             sig.sentiment       = s.label
@@ -189,8 +191,13 @@ with left:
     st.subheader("Settings")
     variant  = st.selectbox("Model Variant",   ["small", "mini", "base"],        index=0,
                             help="small = balanced · mini = fastest · base = most accurate")
+    universe = st.selectbox("Universe", ["scanner", "nifty50", "nifty100"], index=0,
+                            help="scanner = rank today's gainers/losers (volatile movers) · "
+                                 "nifty50 / nifty100 = fixed liquid large-caps where Kronos "
+                                 "has its edge (no volatility selection)")
     cap      = st.selectbox("Cap Tier",        ["all", "large", "mid", "small"], index=0,
-                            help="Nifty universe to scan")
+                            disabled=(universe != "scanner"),
+                            help="Which tiers the scanner ranks (ignored unless Universe = scanner)")
     interval = st.selectbox("Candle Interval", ["1h", "15m", "5m", "1m"],        index=0,
                             help="1h swing · 15m intraday · 5m detailed")
     top     = st.number_input("Top N per Tier",   min_value=1, max_value=50,  value=10, step=5)
@@ -247,7 +254,11 @@ with right:
                                      use_container_width=True, hide_index=True)
         elif ss.pred_all:
             symbols_list = [sym for sym, *_ in ss.pred_all]
-            st.info(f"Symbols override: {', '.join(symbols_list)}")
+            if ss.pred_default_tier == "large":
+                st.info(f"Fixed universe — {len(symbols_list)} liquid large-caps "
+                        f"(no gainer/loser ranking)")
+            else:
+                st.info(f"Symbols override: {', '.join(symbols_list)}")
 
         if ss.pred_trend_rows:
             with st.expander("📈 Trend Analysis", expanded=False):
@@ -284,6 +295,7 @@ with right:
                     interval     = ss.pred_interval,
                     variant      = ss.pred_variant,
                     sentiments   = ss.pred_sentiments,
+                    default_tier = ss.pred_default_tier,
                 )
                 main_prog.progress(1.0, text=label)
             else:
@@ -321,9 +333,16 @@ with right:
         # Step 1: Scanner
         main_prog.progress(0.10, text="[1/6] Scanning NSE...")
         scan_results, symbols = {}, []
+        default_tier = "unknown"
         if symbols_selected:
             symbols = [s.split(" — ")[0] for s in symbols_selected]
             st.info(f"Symbols override: {', '.join(symbols)}")
+        elif universe != "scanner":
+            from pipeline.market_scanner import get_universe
+            symbols = get_universe(universe)
+            default_tier = "large"
+            st.info(f"{universe.upper()} universe — {len(symbols)} liquid large-caps "
+                    f"(no gainer/loser ranking)")
         else:
             from pipeline.market_scanner import get_top_gainers_losers
             scan_results = get_top_gainers_losers(top_n=int(top), tiers=tiers)
@@ -423,6 +442,7 @@ with right:
         st.session_state.pred_variant      = variant
         st.session_state.pred_sentiments   = sentiments
         st.session_state.pred_no_sentiment = no_sentiment
+        st.session_state.pred_default_tier = default_tier
         st.rerun()
 
 
