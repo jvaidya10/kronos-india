@@ -33,6 +33,13 @@ if KRONOS_PATH not in sys.path:
 _predictor = None
 _model_name = None
 
+# Cap on how many sample trajectories to push through the model in a single
+# batched forward pass. Keeps GPU memory bounded for large --samples values.
+_MAX_SAMPLE_BATCH = 32
+
+# Max context length per variant — the single source of truth, also used by main.py.
+CONTEXT_LEN = {"mini": 2048, "small": 512, "base": 512}
+
 
 def load_model(variant: str = "small") -> None:
     """
@@ -64,11 +71,6 @@ def load_model(variant: str = "small") -> None:
         "small": "NeoQuasar/Kronos-small",
         "base":  "NeoQuasar/Kronos-base",
     }
-    context_map = {
-        "mini":  2048,
-        "small": 512,
-        "base":  512,
-    }
 
     if variant not in model_map:
         raise ValueError(f"Invalid variant '{variant}'. Choose from: mini, small, base")
@@ -87,9 +89,50 @@ def load_model(variant: str = "small") -> None:
     tokenizer = KronosTokenizer.from_pretrained(tokenizer_map[variant])
     model     = Kronos.from_pretrained(model_map[variant])
     model     = model.to(device)
-    _predictor = KronosPredictor(model, tokenizer, max_context=context_map[variant])
+    _predictor = KronosPredictor(model, tokenizer, max_context=CONTEXT_LEN[variant])
     _model_name = variant
     print(f"[Kronos] Model loaded: Kronos-{variant} on {device.upper()}")
+
+
+def _draw_samples(x_df, x_timestamp, y_timestamp, pred_len,
+                  sample_count, temperature, top_p) -> list:
+    """
+    Returns a list of `sample_count` single-sample prediction DataFrames.
+
+    Fast path: KronosPredictor.predict_batch runs many series in one forward
+    pass, so we feed it N copies of the same series (each sample_count=1) to get
+    N independent trajectories in one batched call, chunked by _MAX_SAMPLE_BATCH.
+
+    Fallback: if the installed Kronos lacks predict_batch, draw samples one at a
+    time (the original behaviour).
+    """
+    if not hasattr(_predictor, "predict_batch"):
+        preds = []
+        for _ in range(sample_count):
+            preds.append(_predictor.predict(
+                df=x_df, x_timestamp=x_timestamp, y_timestamp=y_timestamp,
+                pred_len=pred_len, T=temperature, top_p=top_p,
+                sample_count=1, verbose=False,
+            ))
+        return preds
+
+    preds = []
+    remaining = sample_count
+    while remaining > 0:
+        n = min(remaining, _MAX_SAMPLE_BATCH)
+        batch = _predictor.predict_batch(
+            df_list=[x_df] * n,
+            x_timestamp_list=[x_timestamp] * n,
+            y_timestamp_list=[y_timestamp] * n,
+            pred_len=pred_len,
+            T=temperature,
+            top_p=top_p,
+            sample_count=1,
+            verbose=False,
+        )
+        preds.extend(batch)
+        remaining -= n
+    return preds
 
 
 def predict_next_day(
@@ -113,19 +156,12 @@ def predict_next_day(
     pred_len = len(y_timestamp)
 
     try:
-        # Run multiple samples for uncertainty estimation
-        all_preds = []
-        for _ in range(sample_count):
-            pred = _predictor.predict(
-                df=x_df,
-                x_timestamp=x_timestamp,
-                y_timestamp=y_timestamp,
-                pred_len=pred_len,
-                T=temperature,
-                top_p=top_p,
-                sample_count=1,
-            )
-            all_preds.append(pred)
+        # Draw `sample_count` independent trajectories for uncertainty estimation.
+        # Each trajectory is one stochastic sample (sample_count=1 → no internal
+        # averaging); batching N copies of the series lets the model run them in a
+        # single forward pass instead of N sequential ones. Chunked to bound memory.
+        all_preds = _draw_samples(x_df, x_timestamp, y_timestamp, pred_len,
+                                  sample_count, temperature, top_p)
 
         # Aggregate: median across samples for robustness
         close_stack = pd.concat([p["close"] for p in all_preds], axis=1)

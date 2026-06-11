@@ -38,6 +38,46 @@ KRONOS_CONTEXT = 512   # default; overridden per model variant
 _MARKET_OPEN  = pd.Timedelta(hours=9,  minutes=15)
 _MARKET_CLOSE = pd.Timedelta(hours=15, minutes=30)
 
+# --- NSE trading calendar -------------------------------------------------
+# Uses `exchange_calendars` (if installed) for accurate, self-updating NSE/BSE
+# trading holidays. Falls back to weekend-only skipping otherwise — the pipeline
+# still runs, it just won't skip exchange holidays in the forecast timestamps.
+_nse_calendar = "uninitialised"   # sentinel: not yet loaded
+
+
+def _get_nse_calendar():
+    """Returns an exchange_calendars calendar for NSE/BSE, or None if unavailable."""
+    global _nse_calendar
+    if _nse_calendar == "uninitialised":
+        _nse_calendar = None
+        try:
+            import exchange_calendars as xcals
+            for code in ("XBOM", "XNSE", "NSE", "BSE"):   # whichever the version ships
+                try:
+                    _nse_calendar = xcals.get_calendar(code)
+                    break
+                except Exception:
+                    continue
+        except ImportError:
+            print("[INFO] `exchange_calendars` not installed — forecast timestamps "
+                  "skip weekends only, not NSE holidays.\n"
+                  "       Install it (pip install exchange_calendars) for holiday accuracy.")
+    return _nse_calendar
+
+
+def _is_trading_day(ts: pd.Timestamp) -> bool:
+    """True if ts falls on an NSE trading day (not a weekend or exchange holiday)."""
+    ts_naive = ts.replace(tzinfo=None) if ts.tzinfo else ts
+    session  = pd.Timestamp(ts_naive).normalize()
+
+    cal = _get_nse_calendar()
+    if cal is not None:
+        try:
+            return bool(cal.is_session(session))
+        except Exception:
+            pass   # date outside the calendar's bounds → fall through to weekend check
+    return session.weekday() < 5
+
 
 def _to_nse_ticker(symbol: str) -> str:
     symbol = symbol.strip().upper()
@@ -84,9 +124,9 @@ def fetch_ohlcv(symbol: str, interval: str = "1h") -> Optional[pd.DataFrame]:
     df = df[["open", "high", "low", "close", "volume"]].dropna()
     df.index = pd.to_datetime(df.index)
 
-    # For sub-hour intervals, keep only market-hours candles
-    if interval != "1h":
-        df = _filter_market_hours(df)
+    # Keep only market-hours candles (drops any stray pre/post-session bars,
+    # including for 1h where yfinance occasionally returns an out-of-session row)
+    df = _filter_market_hours(df)
 
     if len(df) < 30:
         print(f"[WARN] Too few candles for {symbol} ({len(df)}). Skipping.")
@@ -114,7 +154,7 @@ def _filter_market_hours(df: pd.DataFrame) -> pd.DataFrame:
 def _next_market_timestamps(last_ts: pd.Timestamp, n: int, interval: str) -> list:
     """
     Generates n future candle timestamps strictly within NSE market hours,
-    skipping weekends and non-market-hours gaps.
+    skipping weekends, exchange holidays, and non-market-hours gaps.
     """
     step_min  = INTERVAL_MINUTES[interval]
     step      = pd.Timedelta(minutes=step_min)
@@ -124,8 +164,8 @@ def _next_market_timestamps(last_ts: pd.Timestamp, n: int, interval: str) -> lis
     while len(future) < n:
         ts = ts + step
 
-        # Skip weekends
-        if ts.weekday() >= 5:
+        # Skip weekends and NSE holidays
+        if not _is_trading_day(ts):
             continue
 
         # Get time of day as timedelta
@@ -135,11 +175,11 @@ def _next_market_timestamps(last_ts: pd.Timestamp, n: int, interval: str) -> lis
 
         # Skip before market open or after market close
         if tod < _MARKET_OPEN or tod > _MARKET_CLOSE:
-            # Jump to next day's open if we've passed close
+            # Jump to next trading day's open if we've passed close
             if tod > _MARKET_CLOSE:
                 next_day = (midnight + pd.Timedelta(days=1))
-                # Skip weekends
-                while next_day.weekday() >= 5:
+                # Skip weekends and holidays
+                while not _is_trading_day(next_day):
                     next_day += pd.Timedelta(days=1)
                 # Reconstruct with original timezone
                 if ts.tzinfo:

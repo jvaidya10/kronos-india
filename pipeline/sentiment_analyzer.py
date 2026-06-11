@@ -4,9 +4,9 @@ Data source: Google News RSS — free, no API key required.
 """
 
 import re
-import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import feedparser
 
@@ -103,17 +103,36 @@ def analyze(symbol: str) -> SentimentResult:
     return _classify(headlines)
 
 
-def analyze_batch(symbols: list, delay: float = 0.3) -> dict:
+def analyze_batch(symbols: list, max_workers: int = 6) -> dict:
     """
     Returns {symbol: SentimentResult} for a list of NSE symbols.
-    Small delay between RSS requests avoids rate-limiting.
+    RSS fetches run concurrently; FinBERT is pre-loaded once so the lazy
+    init never races across threads. Pass max_workers=1 for serial fetching.
     """
+    # Pre-load the model on the main thread to avoid a load race in the pool.
+    try:
+        _load_finbert()
+    except Exception:
+        pass   # _classify will surface load errors per-symbol if it truly can't load
+
+    if max_workers <= 1:
+        results = {}
+        for sym in symbols:
+            try:
+                results[sym] = analyze(sym)
+            except Exception as e:
+                print(f"  [WARN] Sentiment error for {sym}: {e}")
+                results[sym] = SentimentResult("NEUTRAL", 0.0, 0)
+        return results
+
     results = {}
-    for sym in symbols:
-        try:
-            results[sym] = analyze(sym)
-            time.sleep(delay)
-        except Exception as e:
-            print(f"  [WARN] Sentiment error for {sym}: {e}")
-            results[sym] = SentimentResult("NEUTRAL", 0.0, 0)
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(symbols) or 1)) as ex:
+        futures = {ex.submit(analyze, sym): sym for sym in symbols}
+        for fut in as_completed(futures):
+            sym = futures[fut]
+            try:
+                results[sym] = fut.result()
+            except Exception as e:
+                print(f"  [WARN] Sentiment error for {sym}: {e}")
+                results[sym] = SentimentResult("NEUTRAL", 0.0, 0)
     return results

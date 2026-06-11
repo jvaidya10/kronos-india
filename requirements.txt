@@ -9,3 +9,4 @@ transformers>=4.40.0
 huggingface_hub>=0.23.0
 numpy==1.26.0
 feedparser>=6.0.0
+exchange_calendars>=4.5   # optional: accurate NSE/BSE holiday calendar for forecast timestamps (falls back to weekend-only if absent)

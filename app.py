@@ -19,10 +19,8 @@ import streamlit as st
 from pipeline.data_fetcher     import fetch_ohlcv, prepare_context_and_forecast_timestamps, get_current_price, CANDLES_PER_DAY
 from pipeline.trend_analyzer   import analyze as analyze_trend
 from pipeline.signal_generator import generate_signal
-from pipeline.predictor        import predict_next_day
+from pipeline.predictor        import predict_next_day, CONTEXT_LEN
 from pipeline.sentiment_analyzer import analyze_batch as analyze_sentiments
-
-CONTEXT_LEN = {"mini": 2048, "small": 512, "base": 512}
 
 
 @st.cache_data
