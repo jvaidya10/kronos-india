@@ -93,9 +93,15 @@ def _bias(chg_pct: float, threshold: float = 1.5) -> str:
     return "NEUTRAL"
 
 
-def analyze(symbol: str) -> Optional[TrendSnapshot]:
-    df = fetch_daily(symbol)
+def analyze(symbol: str, df: Optional[pd.DataFrame] = None) -> Optional[TrendSnapshot]:
+    """
+    Computes a trend snapshot for `symbol`. If `df` (daily OHLCV) is supplied it
+    is used as-is — pass a slice ending at a historical date for lookahead-free
+    backtests; otherwise the latest daily data is fetched.
+    """
     if df is None:
+        df = fetch_daily(symbol)
+    if df is None or len(df) < 30:
         return None
 
     close   = df["close"]

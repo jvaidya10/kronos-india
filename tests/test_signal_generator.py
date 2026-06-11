@@ -10,10 +10,12 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import numpy as np
 import pandas as pd
 
 from pipeline.signal_generator import (
     generate_signal, MIN_MOVE_PCT, SL_CAP_PCT, SL_FLOOR_PCT, MIN_RR_RATIO,
+    TARGET_QUANTILE, MIN_DIR_AGREEMENT,
 )
 
 
@@ -119,3 +121,45 @@ def test_entry_falls_back_to_pred_open_when_no_price():
     s = generate_signal("X", _pred(100, 103, 99), current_price=None,
                         trend=FakeTrend(5))
     assert s.entry == 100.0
+
+
+# ── Ensemble distribution path (per-sample stats in pred_df.attrs) ─────────────
+
+def _pred_dist(open_, high, low, highs, lows, up_frac):
+    """Predicted candle with the per-sample distribution metadata the model emits."""
+    df = _pred(open_, high, low)
+    df.attrs["n_samples"]     = len(highs)
+    df.attrs["high_samples"]  = np.array(highs, dtype=float)
+    df.attrs["low_samples"]   = np.array(lows, dtype=float)
+    df.attrs["up_fraction"]   = up_frac
+    df.attrs["down_fraction"] = 1.0 - up_frac
+    return df
+
+
+class TestDistributionPath:
+
+    def test_target_is_quantile_of_sample_highs(self):
+        # TARGET_QUANTILE=0.5 -> target = median of per-sample peak highs (104), not the max (106).
+        s = generate_signal("X", _pred_dist(100, 106, 99,
+                            highs=[102, 104, 106], lows=[99, 99, 99], up_frac=0.9),
+                            current_price=100.0, trend=FakeTrend(5))
+        assert s.direction == "LONG"
+        assert s.target == round(float(np.quantile([102, 104, 106], TARGET_QUANTILE)), 2)
+        assert s.target == 104.0
+
+    def test_conviction_picks_short_despite_larger_upside_excursion(self):
+        # Big high spike (excursion would pick LONG) but 90% of samples close DOWN.
+        # Conviction-first must trade SHORT, the side the ensemble agrees on.
+        s = generate_signal("X", _pred_dist(100, 108, 94,
+                            highs=[101, 102, 108], lows=[94, 95, 96], up_frac=0.1),
+                            current_price=100.0, trend=FakeTrend(-5))
+        assert s.direction == "SHORT"
+        assert s.dir_agreement >= MIN_DIR_AGREEMENT
+
+    def test_low_agreement_blocks_trade(self):
+        # 50/50 split ensemble -> below MIN_DIR_AGREEMENT -> NO TRADE on low conviction.
+        s = generate_signal("X", _pred_dist(100, 106, 99,
+                            highs=[104, 105, 106], lows=[98, 99, 99], up_frac=0.5),
+                            current_price=100.0, trend=FakeTrend(5))
+        assert s.direction == "NO TRADE"
+        assert "conviction" in " ".join(s.reasons).lower()

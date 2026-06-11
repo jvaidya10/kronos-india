@@ -176,6 +176,22 @@ python main.py --symbols RELIANCE --no-sentiment # quick single-stock test
 
 ---
 
+### `--workers`
+
+Number of concurrent network workers used when fetching data (OHLCV download,
+trend analysis, news sentiment, and current-price lookups). These steps are
+I/O-bound, so running them in parallel substantially speeds up large scans.
+
+Default is `8`. Use `--workers 1` for fully serial fetching (e.g. to debug, or
+if you hit news-feed rate limits).
+
+```bash
+python main.py --cap all --top 10          # parallel fetch (default 8 workers)
+python main.py --workers 1                  # serial (slowest, most conservative)
+```
+
+---
+
 ### `--track`
 
 Log all actionable signals to the prediction tracker database (`outputs/tracker.db`).
@@ -306,6 +322,45 @@ Worst loss run  : 3 in a row
 - Targets and stop-losses are recalculated from that actual open using the original percentages
 - EXPIRED trades are closed at the last candle of the `eval_by` date
 - `eval_by` dates skip weekends and official NSE holidays
+
+---
+
+## Backtesting
+
+`backtest.py` replays Kronos over historical intraday windows so you can measure
+the model and tune the signal logic *without waiting weeks for live outcomes*. It
+reuses the exact tracker outcome logic, so backtest results and live `--track`
+results are directly comparable.
+
+It reports three things:
+
+1. **Forecast accuracy** — the raw model's directional hit rate (vs a 50% coin
+   flip) and final-close MAPE, independent of any signal thresholds.
+2. **Signal performance** — WIN / LOSS / EXPIRED, win rate and average P&L at the
+   current settings.
+3. **Config sweep** (`--sweep`) — re-scores the cached predictions across a grid
+   of `target_quantile` × `min_dir_agreement` so you can pick the best defaults.
+   The model runs once per window; the sweep itself is almost free.
+
+```bash
+# Forecast accuracy + signal performance on a basket
+python backtest.py --symbols RELIANCE TCS INFY HDFCBANK --anchors 25
+
+# Tune the target-quantile / agreement defaults
+python backtest.py --symbols TATASTEEL VEDL SAIL ADANIENT --days 3 --sweep
+
+# Isolate pure forecast/target quality (skip trend confluence)
+python backtest.py --symbols RELIANCE INFY --no-trend --sweep
+```
+
+Key options: `--anchors N` (historical windows per symbol), `--samples N`
+(ensemble size), `--variant`, `--interval`, `--days`, `--no-trend`, `--sweep`.
+
+**Two findings worth knowing:** the forecast directional edge is strongest on
+liquid large-caps (calm names, small moves) and weakest on volatile movers; and
+a *reachable* target (`target_quantile` ≈ 0.5, the default) produces a higher win
+rate and far fewer expiries than targeting the single most optimistic predicted
+price. See `signal_generator.py` (`TARGET_QUANTILE`, `MIN_DIR_AGREEMENT`).
 
 ---
 

@@ -179,6 +179,21 @@ def predict_next_day(
         result["close_q25"] = close_stack.quantile(0.25, axis=1)
         result["close_q75"] = close_stack.quantile(0.75, axis=1)
 
+        # Per-sample distribution stats (attached as metadata so the DataFrame
+        # interface stays unchanged). Used by signal_generator for reachable,
+        # quantile-based targets and a directional-agreement conviction gate.
+        per_sample_high = high_stack.max(axis=0).to_numpy()    # each sample's peak high
+        per_sample_low  = low_stack.min(axis=0).to_numpy()     # each sample's trough low
+        # end-vs-start per sample — use positional numpy subtraction; the stacks'
+        # columns share a label ("close"/"open") so pandas would align to all-NaN.
+        net_move        = close_stack.iloc[-1].to_numpy() - open_stack.iloc[0].to_numpy()
+        n               = len(net_move)
+        result.attrs["n_samples"]    = n
+        result.attrs["high_samples"] = per_sample_high
+        result.attrs["low_samples"]  = per_sample_low
+        result.attrs["up_fraction"]  = float((net_move > 0).mean()) if n else 0.0
+        result.attrs["down_fraction"] = float((net_move < 0).mean()) if n else 0.0
+
         return result
 
     except Exception as e:
