@@ -18,7 +18,11 @@ if TYPE_CHECKING:
 MIN_MOVE_PCT = 1.5   # noise filter — ignore predicted moves below this
 SL_CAP_PCT   = 2.5   # max risk per trade (stop-loss ceiling)
 SL_FLOOR_PCT = 1.0   # whipsaw protection (stop-loss floor)
-MIN_RR_RATIO = 2.0   # reject setups below this reward:risk
+# Reject setups below this reward:risk. Lowered from 2.0 to 1.5 after backtests
+# showed 1.5 gives both higher win rate AND higher per-window expectancy across
+# every horizon/universe — with reachable quantile targets, the 1.5–2.0 setups
+# it admits have nearer (more-reachable) targets. See backtest.py.
+MIN_RR_RATIO = 1.5
 
 # Target = this quantile of the per-sample predicted extremes rather than the
 # single most optimistic point. Lower = more reachable target (higher win rate,

@@ -107,7 +107,7 @@ def _forecast_metrics(records):
 
 
 def _evaluate_config(records, target_quantile, min_dir_agreement,
-                     min_move=None, min_rr=None):
+                     min_move=None, min_rr=None, sl_cap=None, sl_floor=None):
     """Re-scores cached predictions under one config. Returns signal stats."""
     sg.TARGET_QUANTILE   = target_quantile
     sg.MIN_DIR_AGREEMENT = min_dir_agreement
@@ -115,6 +115,10 @@ def _evaluate_config(records, target_quantile, min_dir_agreement,
         sg.MIN_MOVE_PCT = min_move
     if min_rr is not None:
         sg.MIN_RR_RATIO = min_rr
+    if sl_cap is not None:
+        sg.SL_CAP_PCT = sl_cap
+    if sl_floor is not None:
+        sg.SL_FLOOR_PCT = sl_floor
 
     wins = losses = expired = fired = 0
     pnls = []
@@ -139,15 +143,16 @@ def _evaluate_config(records, target_quantile, min_dir_agreement,
     return {
         "fired": fired, "wins": wins, "losses": losses, "expired": expired,
         "win_rate": win_rate,
-        "avg_pnl": float(np.mean(pnls)) if pnls else 0.0,
-        "expectancy": float(np.mean(pnls)) if pnls else 0.0,  # per-fired-trade P&L
+        "avg_pnl": float(np.mean(pnls)) if pnls else 0.0,        # per fired trade
+        "pnl_per_window": float(np.sum(pnls) / len(records)) if records else 0.0,  # per opportunity
     }
 
 
 def _print_config(label, m):
-    print(f"  {label:<28} fired={m['fired']:>3} | "
+    print(f"  {label:<30} fired={m['fired']:>3} | "
           f"W/L/E={m['wins']}/{m['losses']}/{m['expired']} | "
-          f"win%={m['win_rate']:>5.1f} | avgP&L={m['avg_pnl']:+.2f}%")
+          f"win%={m['win_rate']:>5.1f} | avgP&L/trade={m['avg_pnl']:+.2f}% | "
+          f"P&L/window={m['pnl_per_window']:+.3f}%")
 
 
 def main():

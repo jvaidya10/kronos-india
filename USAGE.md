@@ -386,9 +386,9 @@ price. See `signal_generator.py` (`TARGET_QUANTILE`, `MIN_DIR_AGREEMENT`).
 | `Confidence`     | How closely Kronos's samples agreed (HIGH / MEDIUM / LOW)       |
 | `Confluence`     | Alignment between Kronos signal and weekly + monthly trend      |
 | `Entry`          | Current price — your trade entry                                |
-| `Target`         | Kronos's predicted high (LONG) or low (SHORT) — no fixed cap    |
+| `Target`         | TARGET_QUANTILE (median) of Kronos's per-sample predicted range |
 | `Stop Loss`      | Kronos's opposite extreme, clamped to 1.0–2.5% risk band        |
-| `R:R Ratio`      | Reward-to-risk ratio — minimum 2:1 to take the trade            |
+| `R:R Ratio`      | Reward-to-risk ratio — minimum 1.5:1 to take the trade          |
 | `Sentiment`      | FinBERT news sentiment — BULLISH / BEARISH / NEUTRAL            |
 | `Trend score`    | -8 (strongly bearish) to +8 (strongly bullish)                  |
 | `RVOL`           | Today's volume vs 20-day average — spike confirms the move      |
@@ -413,11 +413,15 @@ fixed profit/loss percentages.
 
 | | Target | Stop-loss |
 | --- | --- | --- |
-| LONG | `pred_high` (Kronos's predicted peak) | `pred_low`, clamped to the 1.0–2.5% risk band |
-| SHORT | `pred_low` (Kronos's predicted trough) | `pred_high`, clamped to the 1.0–2.5% risk band |
+| LONG | `TARGET_QUANTILE` of per-sample peak highs | opposite extreme, clamped to the 1.0–2.5% risk band |
+| SHORT | `TARGET_QUANTILE` of per-sample trough lows | opposite extreme, clamped to the 1.0–2.5% risk band |
 
-A signal only fires if the predicted move toward the target is at least
-**1.5%** (noise filter) and the resulting reward:risk is at least **2:1**.
+Direction is chosen by the ensemble's **net-direction vote** (the side most of
+Kronos's samples close toward), not the larger excursion — a volatile up-spike
+can occur even when most samples close lower. A signal only fires if at least
+`MIN_DIR_AGREEMENT` (55%) of samples agree on the direction, the predicted move
+toward the target is at least **1.5%**, and the reward:risk is at least **1.5:1**
+(lowered from 2:1 after backtesting — see the Backtesting section).
 
 **Why this replaced the old fixed 5–7% target / 2.5% stop:**
 

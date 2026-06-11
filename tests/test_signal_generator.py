@@ -100,8 +100,8 @@ class TestFilters:
         assert s.direction == "NO TRADE"
 
     def test_rr_filter_rejects_weak_setup(self):
-        # Up 4% target, down 3% risk -> stop capped to 2.5% -> R:R 1.6 < 2.0.
-        s = generate_signal("X", _pred(100, 104, 97), current_price=100.0,
+        # Up 2.8% target, down 2.5% risk -> stop capped to 2.5% -> R:R 1.12 < 1.5.
+        s = generate_signal("X", _pred(100, 102.8, 97.5), current_price=100.0,
                             trend=FakeTrend(5))
         assert s.direction == "NO TRADE"
         assert s.rr_ratio < MIN_RR_RATIO
