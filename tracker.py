@@ -397,29 +397,37 @@ def report() -> None:
     expired    = evaluated[evaluated["outcome"] == "EXPIRED"]
 
     total      = len(evaluated)
-    win_rate   = len(wins) / total * 100 if total else 0
-    avg_win    = wins["pnl_pct"].mean()   if not wins.empty   else 0
-    avg_loss   = losses["pnl_pct"].mean() if not losses.empty else 0
+    decisive   = len(wins) + len(losses)
+    hit_rate   = len(wins) / total * 100 if total else 0          # wins / ALL trades
+    win_rate   = len(wins) / decisive * 100 if decisive else 0    # wins / (wins + losses)
+    avg_win    = wins["pnl_pct"].mean()    if not wins.empty    else 0
+    avg_loss   = losses["pnl_pct"].mean()  if not losses.empty  else 0
+    avg_expired= expired["pnl_pct"].mean() if not expired.empty else 0
     avg_pnl    = evaluated["pnl_pct"].mean()
 
-    # avg_loss must be <= 0 for this formula to be correct.
-    # If it's positive a data issue has crept in — clamp and warn rather than silently inflate.
-    if avg_loss > 0:
-        print(f"  [WARN] avg_loss is positive ({avg_loss:+.2f}%) — check evaluated outcomes for data errors.")
-        avg_loss = 0
-    expectancy = (win_rate / 100 * avg_win) + ((1 - win_rate / 100) * avg_loss)
+    # Expectancy = expected P&L per trade taken, weighting EACH outcome class by
+    # its own realised average P&L. Expired trades exit at the eval-date close, so
+    # they are counted at their real (often non-zero) P&L instead of being lumped
+    # in with losses. This equals the mean realised P&L across all evaluated trades.
+    p_win = len(wins)    / total if total else 0
+    p_los = len(losses)  / total if total else 0
+    p_exp = len(expired) / total if total else 0
+    expectancy = p_win * avg_win + p_los * avg_loss + p_exp * avg_expired
 
     print("\n" + "=" * 60)
     print("  KRONOS PREDICTION TRACKER — PERFORMANCE REPORT")
     print("=" * 60)
     print(f"  Total signals evaluated : {total}")
-    print(f"  Wins                    : {len(wins)}  ({win_rate:.1f}%)")
+    print(f"  Wins                    : {len(wins)}  ({win_rate:.1f}% of decided, {hit_rate:.1f}% of all)")
     print(f"  Losses                  : {len(losses)}")
     print(f"  Expired (no hit)        : {len(expired)}")
     print(f"  Avg win P&L             : {avg_win:+.2f}%")
     print(f"  Avg loss P&L            : {avg_loss:+.2f}%")
+    print(f"  Avg expired P&L         : {avg_expired:+.2f}%")
     print(f"  Avg P&L all trades      : {avg_pnl:+.2f}%")
-    print(f"  Expectancy              : {expectancy:+.2f}% per trade")
+    print(f"  Expectancy              : {expectancy:+.2f}% per trade  "
+          f"[win {p_win*100:.0f}%×{avg_win:+.1f} + loss {p_los*100:.0f}%×{avg_loss:+.1f} "
+          f"+ exp {p_exp*100:.0f}%×{avg_expired:+.1f}]")
 
     # By confluence
     print("\n  --- By Confluence Level ---")
